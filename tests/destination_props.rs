@@ -157,3 +157,45 @@ proptest! {
         prop_assert_eq!(&plaintext2, &data, "GROUP decrypt with loaded key must return original");
     }
 }
+
+// Feature: ferret-packet-transport, Property 5: Announce signature validity
+// **Validates: Requirements 4.6, 4.7, 4.8**
+proptest! {
+    #[test]
+    fn announce_signature_validity(
+        app_data in proptest::collection::vec(any::<u8>(), 0..64),
+    ) {
+        use ferret_rns::identity::{Identity, validate_announce, AnnounceData};
+
+        let id = Identity::new();
+        let prv_key = id.get_private_key().unwrap();
+        let id_for_dest = Identity::from_private_key(&prv_key).unwrap();
+
+        let mut dest = ferret_rns::destination::Destination::new(
+            Some(id_for_dest),
+            ferret_rns::types::destination::DestinationDirection::In,
+            ferret_rns::types::destination::DestinationType::Single,
+            "testapp",
+            &["announce"],
+        )
+        .unwrap();
+
+        let ad = if app_data.is_empty() { None } else { Some(app_data.as_slice()) };
+        let packet = dest.announce(ad, false, None, false, None).unwrap().unwrap();
+
+        // Parse the announce data and validate signature
+        let announce = AnnounceData::parse(
+            &packet.data,
+            &dest.hash,
+            packet.context_flag == ferret_rns::types::packet::ContextFlag::Set,
+        )
+        .unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = ferret_rns::identity::IdentityStore::new();
+        let ratchet_store = ferret_rns::identity::RatchetStore::new(dir.path().to_path_buf());
+
+        let valid = validate_announce(&announce, &store, &ratchet_store, true).unwrap();
+        prop_assert!(valid, "announce signature must be valid");
+    }
+}
