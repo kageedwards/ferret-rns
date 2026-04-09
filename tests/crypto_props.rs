@@ -28,3 +28,26 @@ proptest! {
         prop_assert_eq!(tag.len(), 32);
     }
 }
+
+// Feature: ferret-crypto-foundation, Property 11: PKCS7 Padding Round-Trip
+// **Validates: Requirements 8.1, 8.3, 8.5, 8.6**
+proptest! {
+    #[test]
+    fn pkcs7_pad_unpad_round_trip(
+        data in proptest::collection::vec(any::<u8>(), 0..512),
+        block_size in 1u8..=255u8,
+    ) {
+        let bs = block_size as usize;
+        let padded = ferret_rns::crypto::pkcs7::pad(&data, bs);
+        let unpadded = ferret_rns::crypto::pkcs7::unpad(&padded, bs).unwrap();
+        prop_assert_eq!(&unpadded, &data);
+
+        // Padded length is always a multiple of block_size
+        prop_assert_eq!(padded.len() % bs, 0);
+
+        // When input is already aligned, padded length == input.len() + block_size
+        if !data.is_empty() && data.len() % bs == 0 {
+            prop_assert_eq!(padded.len(), data.len() + bs);
+        }
+    }
+}
