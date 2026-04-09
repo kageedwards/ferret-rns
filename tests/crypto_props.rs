@@ -94,3 +94,54 @@ proptest! {
         prop_assert_eq!(reconstructed.to_bytes(), pub_bytes);
     }
 }
+
+// Feature: ferret-crypto-foundation, Property 3: Ed25519 Sign-then-Verify
+// **Validates: Requirements 3.1, 3.2, 3.3, 3.5, 3.6**
+proptest! {
+    #[test]
+    fn ed25519_sign_then_verify(
+        seed in any::<[u8; 32]>(),
+        message in proptest::collection::vec(any::<u8>(), 0..1024),
+    ) {
+        let signing_key = ferret_rns::crypto::ed25519::Ed25519SigningKey::from_seed(&seed);
+        let verifying_key = signing_key.verifying_key();
+        let signature = signing_key.sign(&message);
+        prop_assert!(verifying_key.verify(&message, &signature).is_ok());
+    }
+}
+
+// Feature: ferret-crypto-foundation, Property 4: Ed25519 Seed Round-Trip
+// **Validates: Requirements 3.3, 3.4**
+proptest! {
+    #[test]
+    fn ed25519_seed_round_trip(seed in any::<[u8; 32]>()) {
+        let signing_key = ferret_rns::crypto::ed25519::Ed25519SigningKey::from_seed(&seed);
+
+        // from_seed → to_seed returns original
+        prop_assert_eq!(signing_key.to_seed(), seed);
+
+        // verifying_key → to_bytes → from_bytes → to_bytes is identity
+        let vk = signing_key.verifying_key();
+        let vk_bytes = vk.to_bytes();
+        let vk2 = ferret_rns::crypto::ed25519::Ed25519VerifyingKey::from_bytes(&vk_bytes).unwrap();
+        prop_assert_eq!(vk2.to_bytes(), vk_bytes);
+    }
+}
+
+// Feature: ferret-crypto-foundation, Property 5: Ed25519 Wrong-Key Rejection
+// **Validates: Requirements 3.7**
+proptest! {
+    #[test]
+    fn ed25519_wrong_key_rejection(
+        seed_a in any::<[u8; 32]>(),
+        seed_b in any::<[u8; 32]>(),
+        message in proptest::collection::vec(any::<u8>(), 0..1024),
+    ) {
+        prop_assume!(seed_a != seed_b);
+        let signing_key_a = ferret_rns::crypto::ed25519::Ed25519SigningKey::from_seed(&seed_a);
+        let signing_key_b = ferret_rns::crypto::ed25519::Ed25519SigningKey::from_seed(&seed_b);
+        let vk_b = signing_key_b.verifying_key();
+        let signature = signing_key_a.sign(&message);
+        prop_assert!(vk_b.verify(&message, &signature).is_err());
+    }
+}
