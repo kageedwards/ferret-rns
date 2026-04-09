@@ -27,3 +27,65 @@ proptest! {
         prop_assert_eq!(id.hash().unwrap(), id2.hash().unwrap());
     }
 }
+
+// Feature: ferret-identity, Property 3: Encrypt/Decrypt Round-Trip
+// **Validates: Requirements 3.1, 3.2, 3.4, 3.5, 3.6, 4.1, 4.5, 4.8**
+proptest! {
+    #[test]
+    fn encrypt_decrypt_round_trip(
+        plaintext in proptest::collection::vec(any::<u8>(), 1..512),
+    ) {
+        let id = ferret_rns::identity::Identity::new();
+        let encrypted = id.encrypt(&plaintext, None).unwrap();
+        let decrypted = id.decrypt(&encrypted, None, false).unwrap().unwrap();
+        prop_assert_eq!(&decrypted, &plaintext);
+    }
+}
+
+// Feature: ferret-identity, Property 4: Ratchet Encrypt/Decrypt Round-Trip
+// **Validates: Requirements 3.3, 4.2, 4.3, 4.9**
+proptest! {
+    #[test]
+    fn ratchet_encrypt_decrypt_round_trip(
+        plaintext in proptest::collection::vec(any::<u8>(), 1..512),
+    ) {
+        use ferret_rns::crypto::x25519::X25519PrivateKey;
+        let id = ferret_rns::identity::Identity::new();
+        let ratchet_prv = X25519PrivateKey::generate();
+        let ratchet_pub = ratchet_prv.public_key().to_bytes();
+        let ratchet_prv_bytes = ratchet_prv.to_bytes().to_vec();
+
+        let encrypted = id.encrypt(&plaintext, Some(&ratchet_pub)).unwrap();
+        let decrypted = id.decrypt(&encrypted, Some(&[ratchet_prv_bytes]), false).unwrap().unwrap();
+        prop_assert_eq!(&decrypted, &plaintext);
+    }
+}
+
+// Feature: ferret-identity, Property 5: Sign/Verify Round-Trip
+// **Validates: Requirements 5.1, 5.2, 5.6**
+proptest! {
+    #[test]
+    fn sign_verify_round_trip(
+        message in proptest::collection::vec(any::<u8>(), 0..1024),
+    ) {
+        let id = ferret_rns::identity::Identity::new();
+        let sig = id.sign(&message).unwrap();
+        let valid = id.validate(&sig, &message).unwrap();
+        prop_assert!(valid);
+    }
+}
+
+// Feature: ferret-identity, Property 6: Wrong-Key Signature Rejection
+// **Validates: Requirements 5.3, 5.7**
+proptest! {
+    #[test]
+    fn wrong_key_signature_rejection(
+        message in proptest::collection::vec(any::<u8>(), 1..1024),
+    ) {
+        let id1 = ferret_rns::identity::Identity::new();
+        let id2 = ferret_rns::identity::Identity::new();
+        let sig = id1.sign(&message).unwrap();
+        let valid = id2.validate(&sig, &message).unwrap();
+        prop_assert!(!valid);
+    }
+}

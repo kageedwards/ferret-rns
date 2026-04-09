@@ -186,6 +186,135 @@ impl Identity {
         }
         Self::from_private_key(&data)
     }
+
+    /// Encrypt plaintext for this identity, optionally using a ratchet public key.
+    /// Returns: ephemeral_pub_bytes (32) ++ token_ciphertext
+    pub fn encrypt(&self, plaintext: &[u8], ratchet: Option<&[u8; 32]>) -> Result<Vec<u8>> {
+        let pub_key = self.pub_key.as_ref().ok_or(FerretError::MissingPublicKey)?;
+
+        let ephemeral = X25519PrivateKey::generate();
+        let ephemeral_pub_bytes = ephemeral.public_key().to_bytes();
+
+        let target_pub = match ratchet {
+            Some(r) => X25519PublicKey::from_bytes(r),
+            None => X25519PublicKey::from_bytes(&pub_key.to_bytes()),
+        };
+
+        let shared_key = ephemeral.exchange(&target_pub);
+
+        let hash = self.hash.as_ref().ok_or(FerretError::MissingPublicKey)?;
+        let derived_key = crate::crypto::hkdf::hkdf(
+            super::DERIVED_KEY_LENGTH,
+            &shared_key,
+            Some(hash.as_slice()),
+            None,
+        )?;
+
+        let token = crate::crypto::token::Token::new(&derived_key)?;
+        let ciphertext = token.encrypt(plaintext);
+
+        let mut result = Vec::with_capacity(32 + ciphertext.len());
+        result.extend_from_slice(&ephemeral_pub_bytes);
+        result.extend_from_slice(&ciphertext);
+        Ok(result)
+    }
+
+    /// Decrypt a ciphertext token addressed to this identity.
+    /// Tries ratchet keys first, then falls back to identity key (unless enforce_ratchets).
+    /// Returns Ok(Some(plaintext)) on success, Ok(None) if ratchet-enforced and no ratchet works.
+    pub fn decrypt(
+        &self,
+        ciphertext_token: &[u8],
+        ratchets: Option<&[Vec<u8>]>,
+        enforce_ratchets: bool,
+    ) -> Result<Option<Vec<u8>>> {
+        let prv = self.prv.as_ref().ok_or(FerretError::MissingPrivateKey)?;
+
+        if ciphertext_token.len() <= 32 {
+            return Err(FerretError::Token("ciphertext token too short".into()));
+        }
+
+        let peer_pub_bytes: [u8; 32] = ciphertext_token[..32]
+            .try_into()
+            .map_err(|_| FerretError::Token("invalid ephemeral key".into()))?;
+        let peer_pub = X25519PublicKey::from_bytes(&peer_pub_bytes);
+        let ciphertext = &ciphertext_token[32..];
+
+        let hash = self.hash.as_ref().ok_or(FerretError::MissingPublicKey)?;
+
+        // Try ratchet keys first
+        let mut plaintext: Option<Vec<u8>> = None;
+        if let Some(ratchet_keys) = ratchets {
+            for ratchet_bytes in ratchet_keys {
+                if ratchet_bytes.len() != 32 {
+                    continue;
+                }
+                let ratchet_prv_bytes: [u8; 32] = ratchet_bytes[..32]
+                    .try_into()
+                    .map_err(|_| FerretError::KeyLength {
+                        expected: 32,
+                        got: ratchet_bytes.len(),
+                    })?;
+                let ratchet_prv = X25519PrivateKey::from_bytes(&ratchet_prv_bytes);
+                // Re-derive peer_pub for each attempt since exchange consumes nothing
+                let ratchet_peer_pub = X25519PublicKey::from_bytes(&peer_pub_bytes);
+                let shared_key = ratchet_prv.exchange(&ratchet_peer_pub);
+                match self.try_decrypt(&shared_key, hash, ciphertext) {
+                    Ok(pt) => {
+                        plaintext = Some(pt);
+                        break;
+                    }
+                    Err(_) => continue,
+                }
+            }
+        }
+
+        if enforce_ratchets && plaintext.is_none() {
+            return Ok(None);
+        }
+
+        if plaintext.is_none() {
+            // Fallback to identity key
+            let shared_key = prv.exchange(&peer_pub);
+            plaintext = Some(self.try_decrypt(&shared_key, hash, ciphertext)?);
+        }
+
+        Ok(plaintext)
+    }
+
+    /// Attempt decryption with a given shared key and identity hash.
+    fn try_decrypt(
+        &self,
+        shared_key: &[u8; 32],
+        hash: &[u8; 16],
+        ciphertext: &[u8],
+    ) -> Result<Vec<u8>> {
+        let derived_key = crate::crypto::hkdf::hkdf(
+            super::DERIVED_KEY_LENGTH,
+            shared_key,
+            Some(hash.as_slice()),
+            None,
+        )?;
+        let token = crate::crypto::token::Token::new(&derived_key)?;
+        token.decrypt(ciphertext)
+    }
+
+    /// Sign a message with the Ed25519 signing key. Returns 64-byte signature.
+    pub fn sign(&self, message: &[u8]) -> Result<[u8; 64]> {
+        let sig_prv = self.sig_prv.as_ref().ok_or(FerretError::MissingPrivateKey)?;
+        Ok(sig_prv.sign(message))
+    }
+
+    /// Verify a signature against a message using the Ed25519 verifying key.
+    /// Returns true if valid, false if invalid signature.
+    pub fn validate(&self, signature: &[u8; 64], message: &[u8]) -> Result<bool> {
+        let sig_pub = self.sig_pub.as_ref().ok_or(FerretError::MissingPublicKey)?;
+        match sig_pub.verify(message, signature) {
+            Ok(()) => Ok(true),
+            Err(FerretError::SignatureVerification) => Ok(false),
+            Err(e) => Err(e),
+        }
+    }
 }
 
 impl std::fmt::Display for Identity {
