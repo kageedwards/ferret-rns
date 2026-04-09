@@ -160,3 +160,64 @@ proptest! {
         prop_assert_eq!(actual_id, expected_id);
     }
 }
+
+// Feature: ferret-identity, Property 10: Announce Validation Round-Trip
+// **Validates: Requirements 9.2, 9.3, 9.4, 9.5, 9.8, 9.11, 9.12**
+proptest! {
+    #[test]
+    fn announce_validation_round_trip(
+        app_data in proptest::collection::vec(any::<u8>(), 0..64),
+    ) {
+        use ferret_rns::identity::{Identity, IdentityStore, RatchetStore, AnnounceData, validate_announce};
+        use ferret_rns::crypto::hashes::sha256;
+        use ferret_rns::types::constants::TRUNCATED_HASHLENGTH;
+
+        let id = Identity::new();
+        let pub_key = id.get_public_key().unwrap();
+        let identity_hash = id.hash().unwrap();
+
+        // Compute name_hash and destination_hash
+        let name_hash = &sha256(b"testapp.testaspect")[..10]; // 10 bytes
+        let mut hash_material = Vec::new();
+        hash_material.extend_from_slice(name_hash);
+        hash_material.extend_from_slice(identity_hash);
+        let dest_hash = &Identity::full_hash(&hash_material)[..TRUNCATED_HASHLENGTH / 8];
+
+        // Build random_hash (10 bytes)
+        let random_hash = &sha256(b"random")[..10];
+
+        // Build signed data and sign
+        let mut signed_data = Vec::new();
+        signed_data.extend_from_slice(dest_hash);
+        signed_data.extend_from_slice(&pub_key);
+        signed_data.extend_from_slice(name_hash);
+        signed_data.extend_from_slice(random_hash);
+        if !app_data.is_empty() {
+            signed_data.extend_from_slice(&app_data);
+        }
+        let signature = id.sign(&signed_data).unwrap();
+
+        // Build announce data bytes (no ratchet)
+        let mut data = Vec::new();
+        data.extend_from_slice(&pub_key);
+        data.extend_from_slice(name_hash);
+        data.extend_from_slice(random_hash);
+        data.extend_from_slice(&signature);
+        if !app_data.is_empty() {
+            data.extend_from_slice(&app_data);
+        }
+
+        let announce = AnnounceData::parse(&data, dest_hash, false).unwrap();
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = IdentityStore::new();
+        let ratchet_store = RatchetStore::new(dir.path().to_path_buf());
+
+        let valid = validate_announce(&announce, &store, &ratchet_store, false).unwrap();
+        prop_assert!(valid);
+
+        // Verify identity is recallable
+        let recalled = store.recall(dest_hash).unwrap();
+        prop_assert_eq!(recalled.get_public_key().unwrap(), pub_key);
+    }
+}
