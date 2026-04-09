@@ -182,3 +182,35 @@ proptest! {
         prop_assert_eq!(&out_none_ctx, &out_empty_ctx);
     }
 }
+
+// Feature: ferret-crypto-foundation, Property 10: AES-CBC Encryption Round-Trip
+// **Validates: Requirements 7.1, 7.2, 7.3, 7.4**
+proptest! {
+    #[test]
+    fn aes128_cbc_encrypt_decrypt_round_trip(
+        num_blocks in 1usize..=32,
+        block_data in proptest::collection::vec(any::<u8>(), 512),
+        key in any::<[u8; 16]>(),
+        iv in any::<[u8; 16]>(),
+    ) {
+        let len = num_blocks * 16;
+        let plaintext = &block_data[..len];
+        let ciphertext = ferret_rns::crypto::aes_cbc::aes128_cbc_encrypt(plaintext, &key, &iv);
+        let decrypted = ferret_rns::crypto::aes_cbc::aes128_cbc_decrypt(&ciphertext, &key, &iv).unwrap();
+        prop_assert_eq!(&decrypted, &plaintext);
+    }
+
+    #[test]
+    fn aes256_cbc_encrypt_decrypt_round_trip(
+        num_blocks in 1usize..=32,
+        block_data in proptest::collection::vec(any::<u8>(), 512),
+        key in any::<[u8; 32]>(),
+        iv in any::<[u8; 16]>(),
+    ) {
+        let len = num_blocks * 16;
+        let plaintext = &block_data[..len];
+        let ciphertext = ferret_rns::crypto::aes_cbc::aes256_cbc_encrypt(plaintext, &key, &iv);
+        let decrypted = ferret_rns::crypto::aes_cbc::aes256_cbc_decrypt(&ciphertext, &key, &iv).unwrap();
+        prop_assert_eq!(&decrypted, &plaintext);
+    }
+}
