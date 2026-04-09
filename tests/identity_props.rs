@@ -136,3 +136,27 @@ proptest! {
         prop_assert_eq!(recalled.get_public_key().unwrap(), pub_key);
     }
 }
+
+// Feature: ferret-identity, Property 9: RatchetStore Remember/Get Round-Trip
+// **Validates: Requirements 8.3, 8.4, 8.6, 8.11**
+proptest! {
+    #[test]
+    fn ratchet_store_remember_get(
+        dest_hash in proptest::collection::vec(any::<u8>(), 16..=16),
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let store = ferret_rns::identity::RatchetStore::new(dir.path().to_path_buf());
+
+        let ratchet_prv = ferret_rns::identity::RatchetStore::generate();
+        store.remember_ratchet(&dest_hash, &ratchet_prv).unwrap();
+
+        let retrieved = store.get_ratchet(&dest_hash).unwrap();
+        prop_assert_eq!(&retrieved, &ratchet_prv.to_vec());
+
+        // current_ratchet_id should match
+        let ratchet_pub = ferret_rns::identity::RatchetStore::ratchet_public_bytes(&ratchet_prv);
+        let expected_id = ferret_rns::identity::RatchetStore::get_ratchet_id(&ratchet_pub);
+        let actual_id = store.current_ratchet_id(&dest_hash).unwrap();
+        prop_assert_eq!(actual_id, expected_id);
+    }
+}
