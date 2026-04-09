@@ -315,6 +315,28 @@ impl Identity {
             Err(e) => Err(e),
         }
     }
+
+    /// SHA-256 hash of data (32 bytes). Equivalent to RNS.Identity.full_hash().
+    pub fn full_hash(data: &[u8]) -> [u8; 32] {
+        sha256(data)
+    }
+
+    /// Truncated SHA-256 hash (first 16 bytes = TRUNCATED_HASHLENGTH / 8).
+    /// Equivalent to RNS.Identity.truncated_hash().
+    pub fn truncated_hash(data: &[u8]) -> [u8; 16] {
+        let full = sha256(data);
+        let mut truncated = [0u8; 16];
+        truncated.copy_from_slice(&full[..TRUNCATED_HASHLENGTH / 8]);
+        truncated
+    }
+
+    /// Random truncated hash: truncated_hash(random_16_bytes).
+    /// Equivalent to RNS.Identity.get_random_hash().
+    pub fn get_random_hash() -> [u8; 16] {
+        let mut random_bytes = [0u8; 16];
+        rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut random_bytes);
+        Self::truncated_hash(&random_bytes)
+    }
 }
 
 impl std::fmt::Display for Identity {
