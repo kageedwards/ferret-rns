@@ -145,3 +145,40 @@ proptest! {
         prop_assert!(vk_b.verify(&message, &signature).is_err());
     }
 }
+
+// Feature: ferret-crypto-foundation, Property 8: HKDF Output Length
+// **Validates: Requirements 6.1, 6.7**
+proptest! {
+    #[test]
+    fn hkdf_output_length(
+        length in 1usize..=256,
+        derive_from in proptest::collection::vec(any::<u8>(), 1..128),
+        salt in proptest::collection::vec(any::<u8>(), 0..64),
+        context in proptest::collection::vec(any::<u8>(), 0..64),
+    ) {
+        let salt_opt = if salt.is_empty() { None } else { Some(salt.as_slice()) };
+        let ctx_opt = if context.is_empty() { None } else { Some(context.as_slice()) };
+        let result = ferret_rns::crypto::hkdf::hkdf(length, &derive_from, salt_opt, ctx_opt).unwrap();
+        prop_assert_eq!(result.len(), length);
+    }
+}
+
+// Feature: ferret-crypto-foundation, Property 9: HKDF Default Parameter Equivalence
+// **Validates: Requirements 6.2, 6.3**
+proptest! {
+    #[test]
+    fn hkdf_default_parameter_equivalence(
+        derive_from in proptest::collection::vec(any::<u8>(), 1..128),
+        length in 1usize..=256,
+    ) {
+        // salt=None should equal salt=&[0u8; 32]
+        let out_none_salt = ferret_rns::crypto::hkdf::hkdf(length, &derive_from, None, Some(b"ctx")).unwrap();
+        let out_zero_salt = ferret_rns::crypto::hkdf::hkdf(length, &derive_from, Some(&[0u8; 32]), Some(b"ctx")).unwrap();
+        prop_assert_eq!(&out_none_salt, &out_zero_salt);
+
+        // context=None should equal context=b""
+        let out_none_ctx = ferret_rns::crypto::hkdf::hkdf(length, &derive_from, Some(b"salt"), None).unwrap();
+        let out_empty_ctx = ferret_rns::crypto::hkdf::hkdf(length, &derive_from, Some(b"salt"), Some(b"")).unwrap();
+        prop_assert_eq!(&out_none_ctx, &out_empty_ctx);
+    }
+}
