@@ -1,0 +1,21 @@
+[package]
+name = "ferret-rns"
+version = "0.1.0"
+edition = "2021"
+description = "Ferret — A Rust implementation of the Reticulum Network Stack"
+
+[dependencies]
+x25519-dalek = { version = "2", features = ["static_secrets"] }
+ed25519-dalek = { version = "2", features = ["rand_core"] }
+aes = "0.8"
+cbc = { version = "0.1", features = ["alloc"] }
+sha2 = "0.10"
+hmac = "0.12"
+hkdf = "0.12"
+rand = "0.8"
+rmp-serde = "1"
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+
+[dev-dependencies]
+proptest = "1"
