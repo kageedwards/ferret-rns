@@ -51,3 +51,46 @@ proptest! {
         }
     }
 }
+
+// Feature: ferret-crypto-foundation, Property 1: X25519 DH Commutativity
+// **Validates: Requirements 2.5**
+proptest! {
+    #[test]
+    fn x25519_dh_commutativity(
+        seed_a in any::<[u8; 32]>(),
+        seed_b in any::<[u8; 32]>(),
+    ) {
+        let key_a = ferret_rns::crypto::x25519::X25519PrivateKey::from_bytes(&seed_a);
+        let key_b = ferret_rns::crypto::x25519::X25519PrivateKey::from_bytes(&seed_b);
+
+        let pub_a = key_a.public_key();
+        let pub_b = key_b.public_key();
+
+        let shared_ab = key_a.exchange(&pub_b);
+        let shared_ba = key_b.exchange(&pub_a);
+
+        prop_assert_eq!(shared_ab.len(), 32);
+        prop_assert_eq!(shared_ba.len(), 32);
+        prop_assert_eq!(shared_ab, shared_ba);
+    }
+}
+
+// Feature: ferret-crypto-foundation, Property 2: X25519 Public Key Derivation Round-Trip
+// **Validates: Requirements 2.1, 2.2, 2.3, 2.4**
+proptest! {
+    #[test]
+    fn x25519_public_key_derivation_round_trip(seed in any::<[u8; 32]>()) {
+        let priv_key = ferret_rns::crypto::x25519::X25519PrivateKey::from_bytes(&seed);
+        let pub_key = priv_key.public_key();
+        let pub_bytes = pub_key.to_bytes();
+
+        // Derivation is deterministic: same seed → same public key bytes
+        let priv_key2 = ferret_rns::crypto::x25519::X25519PrivateKey::from_bytes(&seed);
+        let pub_bytes2 = priv_key2.public_key().to_bytes();
+        prop_assert_eq!(pub_bytes, pub_bytes2);
+
+        // Public key from_bytes → to_bytes is identity
+        let reconstructed = ferret_rns::crypto::x25519::X25519PublicKey::from_bytes(&pub_bytes);
+        prop_assert_eq!(reconstructed.to_bytes(), pub_bytes);
+    }
+}
