@@ -10,7 +10,7 @@ pub const DERIVED_KEY_LENGTH: usize = 64;
 pub const RATCHET_EXPIRY: u64 = 2_592_000;
 
 // Re-exports (uncomment as types are implemented):
-// pub use identity::Identity;
+pub use identity::Identity;
 // pub use store::IdentityStore;
 // pub use ratchet::RatchetStore;
 // pub use announce::{AnnounceData, validate_announce};
