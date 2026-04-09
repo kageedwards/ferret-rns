@@ -44,4 +44,25 @@ pub enum FerretError {
 
     #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
+
+    // Destination errors
+    #[error("invalid destination configuration: {0}")]
+    InvalidDestination(String),
+
+    // Packet errors
+    #[error("packet exceeds MTU: {size} > {mtu}")]
+    PacketTooLarge { size: usize, mtu: usize },
+
+    #[error("malformed packet: {0}")]
+    MalformedPacket(String),
+
+    #[error("packet requires transport_id for Header2")]
+    MissingTransportId,
+
+    // Transport errors
+    #[error("duplicate destination registration: {0}")]
+    DuplicateDestination(String),
+
+    #[error("ratchet file error: {0}")]
+    RatchetFile(String),
 }

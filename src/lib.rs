@@ -3,5 +3,8 @@ pub mod crypto;
 pub mod types;
 pub mod util;
 pub mod identity;
+pub mod destination;
+pub mod packet;
+pub mod transport;
 
 pub use error::{FerretError, Result};
