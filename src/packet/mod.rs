@@ -6,6 +6,9 @@ pub mod proof;
 use crate::types::destination::DestinationType;
 use crate::Result;
 
+pub use proof::ProofDestination;
+pub use receipt::{PacketReceipt, ReceiptStatus, EXPL_LENGTH, IMPL_LENGTH};
+
 /// Trait breaking the Destination↔Packet circular dependency.
 /// Implemented by Destination and ProofDestination.
 pub trait Encryptable: Send + Sync {

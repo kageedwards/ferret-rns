@@ -4,7 +4,9 @@ use crate::types::destination::DestinationType;
 use crate::types::packet::{ContextFlag, HeaderType, PacketContext, PacketType};
 use crate::types::transport::TransportType;
 use crate::{FerretError, Result};
+use std::time::{SystemTime, UNIX_EPOCH};
 
+use super::proof::ProofDestination;
 use super::Encryptable;
 
 /// A Reticulum wire-format packet.
@@ -329,5 +331,38 @@ impl Packet {
         }
 
         false
+    }
+
+    /// Generate a proof destination for this packet.
+    pub fn generate_proof_destination(&self) -> ProofDestination {
+        ProofDestination::new(self.get_truncated_hash())
+    }
+
+    /// Send the packet. Packs if needed and marks as sent.
+    /// Full Transport integration happens in a later task.
+    pub fn send_packed(&mut self, destination: &dyn Encryptable) -> Result<()> {
+        if self.sent {
+            return Err(FerretError::MalformedPacket("packet already sent".into()));
+        }
+        if !self.packed {
+            self.pack(destination)?;
+        }
+        self.sent = true;
+        self.sent_at = Some(
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .map(|d| d.as_secs_f64())
+                .unwrap_or(0.0),
+        );
+        Ok(())
+    }
+
+    /// Re-pack and prepare for resend.
+    pub fn resend_packed(&mut self, destination: &dyn Encryptable) -> Result<()> {
+        if !self.sent {
+            return Err(FerretError::MalformedPacket("packet not yet sent".into()));
+        }
+        self.pack(destination)?;
+        Ok(())
     }
 }
