@@ -34,4 +34,14 @@ pub enum FerretError {
 
     #[error("invalid enum value {value} for {enum_name}")]
     InvalidEnumValue { enum_name: &'static str, value: u8 },
+
+    // Identity errors
+    #[error("operation requires a public key, but none is available")]
+    MissingPublicKey,
+
+    #[error("operation requires a private key, but none is available")]
+    MissingPrivateKey,
+
+    #[error("I/O error: {0}")]
+    Io(#[from] std::io::Error),
 }

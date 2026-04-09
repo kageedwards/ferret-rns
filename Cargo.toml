@@ -19,3 +19,4 @@ thiserror = "2"
 
 [dev-dependencies]
 proptest = "1"
+tempfile = "3"
