@@ -21,5 +21,5 @@ pub const ALLOW_ALL: u8 = 0x01;
 /// Request policy: allow listed identities only.
 pub const ALLOW_LIST: u8 = 0x02;
 
-// Re-exports (uncomment as types are implemented):
-// pub use destination::Destination;
+// Re-exports
+pub use destination::Destination;
