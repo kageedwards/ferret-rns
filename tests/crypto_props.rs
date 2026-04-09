@@ -214,3 +214,37 @@ proptest! {
         prop_assert_eq!(&decrypted, &plaintext);
     }
 }
+
+// Feature: ferret-crypto-foundation, Property 12: Token Encrypt-Decrypt Round-Trip
+// **Validates: Requirements 9.2, 9.3, 9.9**
+proptest! {
+    #[test]
+    fn token_aes128_encrypt_decrypt_round_trip(
+        plaintext in proptest::collection::vec(any::<u8>(), 0..512),
+        key in any::<[u8; 32]>(),
+    ) {
+        let token = ferret_rns::crypto::token::Token::new(&key).unwrap();
+        let encrypted = token.encrypt(&plaintext);
+        let decrypted = token.decrypt(&encrypted).unwrap();
+        prop_assert_eq!(&decrypted, &plaintext);
+
+        // Token length == PKCS7-padded plaintext length + TOKEN_OVERHEAD (48)
+        let padded_len = plaintext.len() + (16 - (plaintext.len() % 16));
+        prop_assert_eq!(encrypted.len(), padded_len + 48);
+    }
+
+    #[test]
+    fn token_aes256_encrypt_decrypt_round_trip(
+        plaintext in proptest::collection::vec(any::<u8>(), 0..512),
+        key in any::<[u8; 64]>(),
+    ) {
+        let token = ferret_rns::crypto::token::Token::new(&key).unwrap();
+        let encrypted = token.encrypt(&plaintext);
+        let decrypted = token.decrypt(&encrypted).unwrap();
+        prop_assert_eq!(&decrypted, &plaintext);
+
+        // Token length == PKCS7-padded plaintext length + TOKEN_OVERHEAD (48)
+        let padded_len = plaintext.len() + (16 - (plaintext.len() % 16));
+        prop_assert_eq!(encrypted.len(), padded_len + 48);
+    }
+}
