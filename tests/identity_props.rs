@@ -89,3 +89,50 @@ proptest! {
         prop_assert!(!valid);
     }
 }
+
+// Feature: ferret-identity, Property 7: IdentityStore Remember/Recall Round-Trip
+// **Validates: Requirements 7.2, 7.4, 7.7, 7.10**
+proptest! {
+    #[test]
+    fn identity_store_remember_recall(
+        dest_hash in proptest::collection::vec(any::<u8>(), 16..=16),
+        packet_hash in proptest::collection::vec(any::<u8>(), 32..=32),
+        app_data in proptest::collection::vec(any::<u8>(), 0..64),
+    ) {
+        let store = ferret_rns::identity::IdentityStore::new();
+        let id = ferret_rns::identity::Identity::new();
+        let pub_key = id.get_public_key().unwrap();
+
+        store.remember(&packet_hash, &dest_hash, &pub_key, Some(&app_data)).unwrap();
+
+        let recalled = store.recall(&dest_hash).unwrap();
+        prop_assert_eq!(recalled.get_public_key().unwrap(), pub_key);
+
+        let recalled_app = store.recall_app_data(&dest_hash).unwrap();
+        prop_assert_eq!(recalled_app, app_data);
+    }
+}
+
+// Feature: ferret-identity, Property 8: IdentityStore Save/Load Round-Trip
+// **Validates: Requirements 7.8, 7.9**
+proptest! {
+    #[test]
+    fn identity_store_save_load(
+        dest_hash in proptest::collection::vec(any::<u8>(), 16..=16),
+        packet_hash in proptest::collection::vec(any::<u8>(), 32..=32),
+    ) {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("known_destinations");
+
+        let store = ferret_rns::identity::IdentityStore::new();
+        let id = ferret_rns::identity::Identity::new();
+        let pub_key = id.get_public_key().unwrap();
+        store.remember(&packet_hash, &dest_hash, &pub_key, None).unwrap();
+        store.save(&path).unwrap();
+
+        let store2 = ferret_rns::identity::IdentityStore::new();
+        store2.load(&path).unwrap();
+        let recalled = store2.recall(&dest_hash).unwrap();
+        prop_assert_eq!(recalled.get_public_key().unwrap(), pub_key);
+    }
+}
