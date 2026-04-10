@@ -323,6 +323,30 @@ impl Destination {
 
     // ── Callbacks and handlers (Task 7.1) ──
 
+    /// Access the link_established callback (for Link module use).
+    pub(crate) fn invoke_link_established(&self, _link: &crate::link::link::Link) {
+        if let Some(ref cb) = self.link_established_callback {
+            cb();
+        }
+    }
+
+    /// Access the request_handlers map.
+    pub(crate) fn get_request_handler(
+        &self,
+        path_hash: &[u8; 16],
+    ) -> Option<&super::handlers::RequestHandler> {
+        self.request_handlers.get(path_hash)
+    }
+
+    /// Invoke the proof_requested callback, returning whether to prove.
+    pub(crate) fn invoke_proof_requested(&self, packet: &crate::packet::packet::Packet) -> bool {
+        if let Some(ref cb) = self.proof_requested_callback {
+            cb(packet)
+        } else {
+            false
+        }
+    }
+
     /// Store a callback invoked when a link is established.
     pub fn set_link_established_callback(&mut self, cb: Box<dyn Fn() + Send + Sync>) {
         self.link_established_callback = Some(cb);

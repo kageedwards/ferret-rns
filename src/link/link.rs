@@ -14,11 +14,11 @@ use crate::link::{
 };
 use crate::packet::packet::Packet;
 use crate::packet::Encryptable;
+use crate::transport::transport::{PendingLink, TransportState};
 use crate::types::constants::{HEADER_MINSIZE, IFAC_MIN_SIZE, MTU};
 use crate::types::destination::DestinationType;
 use crate::types::packet::{ContextFlag, HeaderType, PacketContext, PacketType};
 use crate::types::transport::TransportType;
-use crate::transport::transport::{PendingLink, TransportState};
 use crate::{FerretError, Result};
 
 // ── LinkCallbacks ──
@@ -108,7 +108,7 @@ pub(crate) struct LinkInner {
     // pub(crate) channel: Option<Channel>,
 
     // Pending requests
-    // pub(crate) pending_requests: Vec<RequestReceipt>,
+    pub(crate) pending_requests: Vec<super::request::RequestReceipt>,
 
     // Callbacks
     pub(crate) callbacks: LinkCallbacks,
@@ -262,6 +262,7 @@ impl Link {
             owner: None,
             attached_interface: None,
             remote_identity: None,
+            pending_requests: Vec::new(),
             callbacks,
         };
 
@@ -364,6 +365,7 @@ impl Link {
             owner: Some(owner),
             attached_interface: None,
             remote_identity: None,
+            pending_requests: Vec::new(),
             callbacks: LinkCallbacks::new(),
         };
 
@@ -464,6 +466,97 @@ impl Link {
         self.link_id_cache = id;
         Ok(())
     }
+
+    // ── Teardown ──
+
+    /// Initiate teardown: encrypt link_id, send as LinkClose, transition to Closed.
+    pub fn teardown(&self, transport: &TransportState) -> Result<()> {
+        let status = self.read()?.status;
+        if status == LinkStatus::Pending || status == LinkStatus::Closed {
+            return Ok(());
+        }
+
+        let link_id = self.read()?.link_id;
+        let encrypted = self.encrypt(&link_id)?;
+
+        let mut packet = Packet::new(
+            self as &dyn Encryptable,
+            encrypted,
+            PacketType::Data,
+            PacketContext::LinkClose,
+            TransportType::Broadcast,
+            HeaderType::Header1,
+            None,
+            false,
+            ContextFlag::Unset,
+        );
+        packet.pack(self as &dyn Encryptable)?;
+        transport.outbound(&mut packet)?;
+
+        let reason = if self.read()?.initiator {
+            TeardownReason::InitiatorClosed
+        } else {
+            TeardownReason::DestinationClosed
+        };
+
+        self.link_closed(reason)?;
+        Ok(())
+    }
+
+    /// Handle a received LinkClose packet: decrypt, verify data == link_id, close.
+    pub(crate) fn teardown_packet(&self, packet: &Packet) -> Result<()> {
+        let plaintext = self.decrypt(&packet.data)?;
+        let plaintext = match plaintext {
+            Some(pt) => pt,
+            None => return Ok(()), // Decryption failed, ignore
+        };
+
+        let link_id = self.read()?.link_id;
+        if plaintext.len() != 16 || plaintext[..] != link_id[..] {
+            return Ok(()); // Data doesn't match link_id, ignore
+        }
+
+        let reason = if self.read()?.initiator {
+            TeardownReason::DestinationClosed
+        } else {
+            TeardownReason::InitiatorClosed
+        };
+
+        self.link_closed(reason)?;
+        Ok(())
+    }
+
+    /// Transition to Closed: zero out keys, set status, invoke callback.
+    pub(crate) fn link_closed(&self, reason: TeardownReason) -> Result<()> {
+        {
+            let mut inner = self.write()?;
+            inner.status = LinkStatus::Closed;
+            inner.teardown_reason = Some(reason);
+
+            // Zero out key material
+            inner.prv = None;
+            inner.pub_key = None;
+            inner.pub_bytes = None;
+            inner.sig_prv = None;
+            inner.sig_pub = None;
+            inner.sig_pub_bytes = None;
+            inner.peer_pub = None;
+            inner.peer_pub_bytes = None;
+            inner.peer_sig_pub = None;
+            inner.peer_sig_pub_bytes = None;
+            inner.shared_key = None;
+            inner.derived_key = None;
+            inner.token = None;
+        }
+
+        // Invoke link_closed callback
+        let inner = self.read()?;
+        if let Some(ref cb) = inner.callbacks.link_closed {
+            cb(self);
+        }
+
+        Ok(())
+    }
 }
 
 // ── Encryptable impl ──
@@ -515,4 +608,92 @@ pub(crate) fn now() -> f64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_secs_f64())
         .unwrap_or(0.0)
+}
+
+// ── Test helpers ──
+
+impl Link {
+    /// Create a minimal Link in Active state with key material for testing.
+    /// Only available for tests.
+    #[doc(hidden)]
+    pub fn new_test_active(derived_key: &[u8]) -> Self {
+        let prv = X25519PrivateKey::generate();
+        let sig_prv = Ed25519SigningKey::generate();
+        let pub_key = prv.public_key();
+        let sig_pub = sig_prv.verifying_key();
+        let pub_bytes = pub_key.to_bytes();
+        let sig_pub_bytes = sig_pub.to_bytes();
+
+        let mtu = MTU;
+        let mdu = compute_mdu(mtu);
+
+        let inner = LinkInner {
+            link_id: [0xAA; 16],
+            initiator: true,
+            prv: Some(prv),
+            pub_key: Some(pub_key),
+            pub_bytes: Some(pub_bytes),
+            sig_prv: Some(sig_prv),
+            sig_pub: Some(sig_pub),
+            sig_pub_bytes: Some(sig_pub_bytes),
+            peer_pub: None,
+            peer_pub_bytes: None,
+            peer_sig_pub: None,
+            peer_sig_pub_bytes: None,
+            shared_key: Some([0xBB; 32]),
+            derived_key: Some(derived_key.to_vec()),
+            token: None,
+            status: LinkStatus::Active,
+            teardown_reason: None,
+            mode: MODE_DEFAULT,
+            activated_at: Some(now()),
+            mtu,
+            mdu,
+            rtt: Some(0.5),
+            request_time: None,
+            establishment_timeout: KEEPALIVE_MAX,
+            establishment_cost: 0,
+            last_inbound: now(),
+            last_outbound: now(),
+            last_data: now(),
+            last_proof: 0.0,
+            last_keepalive: 0.0,
+            tx: 0,
+            rx: 0,
+            txbytes: 0,
+            rxbytes: 0,
+            keepalive: KEEPALIVE_MAX,
+            stale_time: KEEPALIVE_MAX * STALE_FACTOR as f64,
+            destination: None,
+            owner: None,
+            attached_interface: None,
+            remote_identity: None,
+            pending_requests: Vec::new(),
+            callbacks: LinkCallbacks::new(),
+        };
+
+        Link {
+            inner: Arc::new(RwLock::new(inner)),
+            link_id_cache: [0xAA; 16],
+        }
+    }
+
+    /// Close the link with a given reason. Public test helper.
+    #[doc(hidden)]
+    pub fn test_close(&self, reason: TeardownReason) -> Result<()> {
+        self.link_closed(reason)
+    }
+
+    /// Check whether key material is present. Public test helper.
+    #[doc(hidden)]
+    pub fn has_key_material(&self) -> Result<bool> {
+        let inner = self.read()?;
+        Ok(inner.prv.is_some()
+            || inner.pub_key.is_some()
+            || inner.shared_key.is_some()
+            || inner.derived_key.is_some()
+            || inner.token.is_some()
+            || inner.sig_prv.is_some()
+            || inner.sig_pub.is_some())
+    }
 }

@@ -103,3 +103,58 @@ proptest! {
         prop_assert_eq!(&decrypted, &plaintext);
     }
 }
+
+// ── Property 5: Key material zeroed on link close ──
+// For any Link that transitions to Closed, prv, pub_key, shared_key,
+// derived_key should all be None.
+// **Validates: Requirements 5.3**
+
+proptest! {
+    #[test]
+    fn key_material_zeroed_on_close(
+        derived_key in prop::collection::vec(any::<u8>(), 64..=64),
+        reason_byte in 1u8..=3u8,
+    ) {
+        use ferret_rns::link::{LinkStatus, TeardownReason};
+        use ferret_rns::link::link::Link;
+
+        // Build a minimal Link in Active state with key material set
+        let link = Link::new_test_active(&derived_key);
+
+        // Verify keys are present before close
+        prop_assert!(link.has_key_material().unwrap());
+        prop_assert_eq!(link.status().unwrap(), LinkStatus::Active);
+
+        let reason = TeardownReason::try_from(reason_byte).unwrap();
+        link.test_close(reason).unwrap();
+
+        // Verify all key material is zeroed
+        prop_assert_eq!(link.status().unwrap(), LinkStatus::Closed);
+        prop_assert!(!link.has_key_material().unwrap());
+    }
+}
+
+// ── Property 8: Keepalive interval formula ──
+// For any positive RTT, keepalive = clamp(RTT * (360.0 / 1.75), 5.0, 360.0),
+// always in [5.0, 360.0].
+// **Validates: Requirements 4.4**
+
+proptest! {
+    #[test]
+    fn keepalive_interval_formula(
+        rtt in 0.001f64..10.0f64,
+    ) {
+        use ferret_rns::link::watchdog::compute_keepalive;
+        use ferret_rns::link::{KEEPALIVE_MAX, KEEPALIVE_MAX_RTT, KEEPALIVE_MIN};
+
+        let keepalive = compute_keepalive(rtt);
+        let expected = (rtt * (KEEPALIVE_MAX / KEEPALIVE_MAX_RTT)).clamp(KEEPALIVE_MIN, KEEPALIVE_MAX);
+
+        prop_assert!((keepalive - expected).abs() < 1e-10,
+            "keepalive {} != expected {} for rtt {}", keepalive, expected, rtt);
+        prop_assert!(keepalive >= KEEPALIVE_MIN,
+            "keepalive {} < KEEPALIVE_MIN {} for rtt {}", keepalive, KEEPALIVE_MIN, rtt);
+        prop_assert!(keepalive <= KEEPALIVE_MAX,
+            "keepalive {} > KEEPALIVE_MAX {} for rtt {}", keepalive, KEEPALIVE_MAX, rtt);
+    }
+}
