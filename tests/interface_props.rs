@@ -90,3 +90,38 @@ proptest! {
         }
     }
 }
+
+use ferret_rns::interfaces::kiss_codec::{self, KissDecoder};
+
+// ── Property 3: KISS encode/decode round-trip ──
+// For any byte sequence of length 0 to HW_MTU, encoding as CMD_DATA then
+// decoding produces the original byte sequence.
+// **Validates: Requirements 2.2, 2.3, 2.4, 2.5**
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(200))]
+
+    #[test]
+    fn kiss_encode_decode_round_trip(
+        data in prop::collection::vec(any::<u8>(), 0..=1064),
+    ) {
+        let encoded = kiss_codec::encode_data(&data);
+
+        // Encoded frame must start and end with FEND
+        prop_assert_eq!(encoded[0], kiss_codec::FEND);
+        prop_assert_eq!(*encoded.last().unwrap(), kiss_codec::FEND);
+
+        // Feed through streaming decoder
+        let mut decoder = KissDecoder::new(1064);
+        let frames = decoder.feed(&encoded);
+
+        // Exactly one frame returned
+        prop_assert_eq!(frames.len(), 1, "expected 1 frame, got {}", frames.len());
+
+        // Command is CMD_DATA
+        prop_assert_eq!(frames[0].command, kiss_codec::CMD_DATA);
+
+        // Decoded data matches original input
+        prop_assert_eq!(&frames[0].data, &data);
+    }
+}
