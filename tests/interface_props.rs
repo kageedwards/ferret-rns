@@ -269,3 +269,53 @@ proptest! {
         prop_assert_eq!(unmasked, raw, "unmasked packet does not match original");
     }
 }
+
+
+// ── Property 7: IFAC corruption detection ──
+// For any raw packet and valid IFAC configuration, masking then flipping
+// any single bit in the masked output causes unmasking to return None.
+// **Validates: Requirements 3.7**
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(100))]
+
+    #[test]
+    fn ifac_corruption_detection(
+        raw in prop::collection::vec(any::<u8>(), 4..=200),
+        ifac_size in 1usize..=16,
+        netname in "[a-z]{1,8}",
+        netkey in "[a-z]{1,8}",
+        bit_seed in any::<usize>(),
+    ) {
+        let state = IfacState::derive(ifac_size, Some(&netname), Some(&netkey))
+            .expect("IFAC derivation should succeed");
+
+        // Clear the IFAC flag on the first byte to simulate a normal outbound packet
+        let mut raw = raw;
+        raw[0] &= !IFAC_FLAG;
+
+        let masked = ifac_mask(&raw, &state)
+            .expect("ifac_mask should succeed");
+
+        // Use the generated seed to pick a bit position within the masked output
+        let total_bits = masked.len() * 8;
+        let bit_position = bit_seed % total_bits;
+        let byte_idx = bit_position / 8;
+        let bit_idx = bit_position % 8;
+
+        let mut corrupted = masked.clone();
+        corrupted[byte_idx] ^= 1 << bit_idx;
+
+        // Corrupted packet should not unmask successfully
+        let result = ifac_unmask(&corrupted, &state)
+            .expect("ifac_unmask should not return Err");
+
+        prop_assert!(
+            result.is_none(),
+            "Corruption at bit {} (byte {} bit {}) was not detected; unmasking should return None",
+            bit_position,
+            byte_idx,
+            bit_idx,
+        );
+    }
+}
