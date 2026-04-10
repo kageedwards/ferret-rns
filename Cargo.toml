@@ -14,6 +14,7 @@ hmac = "0.12"
 hkdf = "0.12"
 rand = "0.8"
 rmp-serde = "1"
+rmpv = "1"
 serde = { version = "1", features = ["derive"] }
 serde_bytes = "0.11"
 thiserror = "2"
