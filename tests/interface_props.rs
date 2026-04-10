@@ -521,3 +521,51 @@ mod rnode_param_tests {
         }
     }
 }
+
+
+// ── Property 11: RNode bitrate computation ──
+// For any valid LoRa parameter combination, computed bitrate is positive
+// and equals the formula: sf * (4.0 / cr) / (2^sf / (bw / 1000)) * 1000
+// **Validates: Requirements 14.4**
+
+#[cfg(feature = "serial")]
+mod rnode_bitrate_tests {
+    use proptest::prelude::*;
+    use ferret_rns::interfaces::rnode::{compute_bitrate, SF_MIN, SF_MAX, CR_MIN, CR_MAX};
+
+    const COMMON_BANDWIDTHS: [u32; 10] = [
+        7800, 10400, 15600, 20800, 31250, 41700, 62500, 125000, 250000, 500000,
+    ];
+
+    fn bw_strategy() -> impl Strategy<Value = u32> {
+        prop::sample::select(&COMMON_BANDWIDTHS)
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(200))]
+
+        #[test]
+        fn rnode_bitrate_computation(
+            sf in SF_MIN..=SF_MAX,
+            cr in CR_MIN..=CR_MAX,
+            bw in bw_strategy(),
+        ) {
+            let result = compute_bitrate(sf, cr, bw);
+
+            // Bitrate must be positive
+            prop_assert!(result > 0, "bitrate must be positive, got {}", result);
+
+            // Independently compute expected value using the same formula
+            let sf_f = sf as f64;
+            let cr_f = cr as f64;
+            let bw_f = bw as f64;
+            let expected = (sf_f * (4.0 / cr_f) / (f64::powf(2.0, sf_f) / (bw_f / 1000.0)) * 1000.0) as u64;
+
+            prop_assert_eq!(
+                result, expected,
+                "bitrate mismatch for sf={}, cr={}, bw={}: got {}, expected {}",
+                sf, cr, bw, result, expected,
+            );
+        }
+    }
+}
