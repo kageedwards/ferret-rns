@@ -119,7 +119,7 @@ pub fn ifac_mask(raw: &[u8], state: &IfacState) -> Result<Vec<u8>> {
 pub fn ifac_unmask(masked: &[u8], state: &IfacState) -> Result<Option<Vec<u8>>> {
     let ifac_size = state.ifac_size;
 
-    if masked.len() <= 2 + ifac_size {
+    if masked.len() < 2 + ifac_size {
         return Ok(None);
     }
 
