@@ -188,3 +188,41 @@ proptest! {
         }
     }
 }
+
+
+use ferret_rns::interfaces::ifac_processor::IfacState;
+
+// ── Property 5: IFAC derivation determinism ──
+// For any pair of (ifac_netname, ifac_netkey) strings, deriving IFAC state
+// twice produces identical ifac_key, ifac_identity public key bytes, and
+// ifac_signature.
+// **Validates: Requirements 3.1, 3.2**
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(200))]
+
+    #[test]
+    fn ifac_derivation_determinism(
+        netname in ".*",
+        netkey in ".*",
+        ifac_size in 1usize..=32,
+    ) {
+        let state1 = IfacState::derive(ifac_size, Some(&netname), Some(&netkey))
+            .expect("first derivation should succeed");
+        let state2 = IfacState::derive(ifac_size, Some(&netname), Some(&netkey))
+            .expect("second derivation should succeed");
+
+        // ifac_key must be identical
+        prop_assert_eq!(&state1.ifac_key, &state2.ifac_key, "ifac_key mismatch");
+
+        // ifac_identity public key bytes must be identical
+        let pub1 = state1.ifac_identity.get_public_key()
+            .expect("get_public_key should succeed for state1");
+        let pub2 = state2.ifac_identity.get_public_key()
+            .expect("get_public_key should succeed for state2");
+        prop_assert_eq!(pub1, pub2, "ifac_identity public key mismatch");
+
+        // ifac_signature must be identical
+        prop_assert_eq!(state1.ifac_signature, state2.ifac_signature, "ifac_signature mismatch");
+    }
+}
