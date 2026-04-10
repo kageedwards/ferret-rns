@@ -386,3 +386,40 @@ proptest! {
         // Between MEDIUM and SLOW: counters reset, no special assertions needed
     }
 }
+
+// ── Property 3: StreamDataMessage pack/unpack round trip (uncompressed) ──
+// For any stream_id (0..16384), any EOF flag, compressed=false, and any data
+// bytes (0..400), pack then unpack produces equivalent message.
+// **Validates: Requirements 17.1, 17.2, 17.3**
+
+proptest! {
+    #[test]
+    fn stream_data_message_round_trip(
+        stream_id in 0u16..16384u16,
+        eof in any::<bool>(),
+        data in prop::collection::vec(any::<u8>(), 0..400),
+    ) {
+        use ferret_rns::buffer::stream_data::StreamDataMessage;
+        use ferret_rns::channel::message::MessageBase;
+
+        let msg = StreamDataMessage::new(stream_id, eof, false, data.clone()).unwrap();
+        let packed = msg.pack().unwrap();
+
+        // Verify header structure: 2-byte header + data
+        prop_assert_eq!(packed.len(), 2 + data.len());
+
+        // Verify header bits
+        let header = u16::from_be_bytes([packed[0], packed[1]]);
+        prop_assert_eq!(header & 0x3FFF, stream_id);
+        prop_assert_eq!((header >> 15) & 1 == 1, eof);
+        prop_assert_eq!((header >> 14) & 1 == 1, false); // compressed=false
+
+        // Unpack and verify round-trip
+        let mut msg2 = StreamDataMessage::empty();
+        msg2.unpack(&packed).unwrap();
+        prop_assert_eq!(msg2.stream_id, stream_id);
+        prop_assert_eq!(msg2.eof, eof);
+        prop_assert_eq!(msg2.compressed, false);
+        prop_assert_eq!(msg2.data, data);
+    }
+}

@@ -158,3 +158,38 @@ proptest! {
             "keepalive {} > KEEPALIVE_MAX {} for rtt {}", keepalive, KEEPALIVE_MAX, rtt);
     }
 }
+
+// ── Property 7: MDU computation formula ──
+// For any MTU in valid range (69..2_097_152), MDU = floor((MTU - IFAC_MIN_SIZE
+// - HEADER_MINSIZE - TOKEN_OVERHEAD) / AES128_BLOCKSIZE) * AES128_BLOCKSIZE - 1,
+// result is non-negative.
+// **Validates: Requirements 7.5**
+
+proptest! {
+    #[test]
+    fn mdu_computation_formula(
+        mtu in 69usize..2_097_152usize,
+    ) {
+        use ferret_rns::link::link::compute_mdu;
+        use ferret_rns::types::constants::{IFAC_MIN_SIZE, HEADER_MINSIZE};
+        use ferret_rns::crypto::{TOKEN_OVERHEAD, AES128_BLOCKSIZE};
+
+        let mdu = compute_mdu(mtu);
+
+        let usable = mtu
+            .saturating_sub(IFAC_MIN_SIZE)
+            .saturating_sub(HEADER_MINSIZE)
+            .saturating_sub(TOKEN_OVERHEAD);
+        let blocks = usable / AES128_BLOCKSIZE;
+        if blocks == 0 {
+            prop_assert_eq!(mdu, 0, "MDU should be 0 when no full blocks fit");
+        } else {
+            let expected = blocks * AES128_BLOCKSIZE - 1;
+            prop_assert_eq!(mdu, expected,
+                "MDU mismatch for MTU {}: got {}, expected {}", mtu, mdu, expected);
+        }
+
+        // MDU is always non-negative (usize guarantees this, but verify the formula)
+        prop_assert!(mdu <= mtu, "MDU {} should not exceed MTU {}", mdu, mtu);
+    }
+}

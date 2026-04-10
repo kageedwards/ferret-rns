@@ -27,7 +27,7 @@ pub struct Destination {
     pub proof_strategy: ProofStrategy,
     pub accept_link_requests: bool,
     // Callbacks (placeholder types until Link is available in Layer 4)
-    link_established_callback: Option<Box<dyn Fn() + Send + Sync>>,
+    link_established_callback: Option<Box<dyn Fn(&crate::link::link::Link) + Send + Sync>>,
     packet_callback: Option<Box<dyn Fn(&[u8], &crate::packet::packet::Packet) + Send + Sync>>,
     proof_requested_callback: Option<Box<dyn Fn(&crate::packet::packet::Packet) -> bool + Send + Sync>>,
     // Request handlers
@@ -324,9 +324,9 @@ impl Destination {
     // ── Callbacks and handlers (Task 7.1) ──
 
     /// Access the link_established callback (for Link module use).
-    pub(crate) fn invoke_link_established(&self, _link: &crate::link::link::Link) {
+    pub(crate) fn invoke_link_established(&self, link: &crate::link::link::Link) {
         if let Some(ref cb) = self.link_established_callback {
-            cb();
+            cb(link);
         }
     }
 
@@ -348,7 +348,7 @@ impl Destination {
     }
 
     /// Store a callback invoked when a link is established.
-    pub fn set_link_established_callback(&mut self, cb: Box<dyn Fn() + Send + Sync>) {
+    pub fn set_link_established_callback(&mut self, cb: Box<dyn Fn(&crate::link::link::Link) + Send + Sync>) {
         self.link_established_callback = Some(cb);
     }
 
