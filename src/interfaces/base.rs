@@ -3,11 +3,11 @@
 // Ported from the Python reference: lxcf/_ref_rns/Interfaces/Interface.py
 
 use std::collections::VecDeque;
-use std::sync::atomic::{AtomicBool, AtomicU64};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 
 use crate::crypto::sha256;
-use crate::interfaces::ifac_processor::IfacState;
+use crate::interfaces::ifac_processor::{ifac_check, ifac_mask, ifac_unmask, IfacState};
 use crate::transport::InterfaceHandle;
 use crate::types::InterfaceMode;
 use crate::Result;
@@ -393,6 +393,67 @@ impl Interface {
         }
 
         Some(wait_time)
+    }
+
+    // -----------------------------------------------------------------------
+    // Packet processing (task 8.3)
+    // -----------------------------------------------------------------------
+
+    /// Process an inbound packet: IFAC check → unmask if needed → update rxb.
+    ///
+    /// Concrete interfaces call this from their read loops after decoding
+    /// frames from the transport codec (HDLC/KISS/raw).
+    pub fn process_incoming(&self, data: &[u8]) {
+        // Step 1-2: Check IFAC flag/config consistency
+        let (_flag_set, consistent) = ifac_check(data, self.ifac_state.is_some());
+        if !consistent {
+            // Flag doesn't match config — silently drop
+            return;
+        }
+
+        // Step 3-4: Unmask if IFAC is configured, otherwise use data as-is
+        let packet = if let Some(ref state) = self.ifac_state {
+            match ifac_unmask(data, state) {
+                Ok(Some(raw)) => raw,
+                Ok(None) => return, // Bad IFAC tag — drop
+                Err(_) => return,   // Internal error — drop
+            }
+        } else {
+            data.to_vec()
+        };
+
+        // Step 5: Update rxb counter
+        self.rxb.fetch_add(packet.len() as u64, Ordering::Relaxed);
+
+        // Step 6: Deliver to transport for inbound processing.
+        // TODO: Wire up transport delivery — concrete interfaces will call
+        // TransportState::inbound(packet, interface_arc) once they have an
+        // Arc<dyn InterfaceHandle> reference to pass along.
+        let _ = &packet;
+    }
+
+    /// Process an outbound packet: IFAC mask if configured → transmit → update txb.
+    pub fn process_outgoing(&self, data: &[u8]) -> Result<()> {
+        // Step 1: IFAC mask if configured
+        let to_send = if let Some(ref state) = self.ifac_state {
+            ifac_mask(data, state)?
+        } else {
+            data.to_vec()
+        };
+
+        // Step 2: Transmit via transmit_fn callback
+        if let Some(ref f) = self.transmit_fn {
+            f(&to_send)?;
+        } else {
+            return Err(crate::FerretError::InterfaceError(
+                "no transmit function configured".into(),
+            ));
+        }
+
+        // Step 3: Update txb counter
+        self.txb.fetch_add(data.len() as u64, Ordering::Relaxed);
+
+        Ok(())
     }
 }
 
