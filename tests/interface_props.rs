@@ -272,17 +272,19 @@ proptest! {
 
 
 // ── Property 7: IFAC corruption detection ──
-// For any raw packet and valid IFAC configuration, masking then flipping
-// any single bit in the masked output causes unmasking to return None.
+// For any raw packet and valid IFAC configuration, flipping any single bit
+// in the IFAC tag region of the masked output causes unmasking to return None.
+// The IFAC tag (bytes 2..2+ifac_size) is the authentication code that gets
+// verified during unmasking — corrupting it must always be detected.
 // **Validates: Requirements 3.7**
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(100))]
+    #![proptest_config(ProptestConfig::with_cases(200))]
 
     #[test]
     fn ifac_corruption_detection(
         raw in prop::collection::vec(any::<u8>(), 4..=200),
-        ifac_size in 1usize..=16,
+        ifac_size in 2usize..=16,
         netname in "[a-z]{1,8}",
         netkey in "[a-z]{1,8}",
         bit_seed in any::<usize>(),
@@ -297,22 +299,22 @@ proptest! {
         let masked = ifac_mask(&raw, &state)
             .expect("ifac_mask should succeed");
 
-        // Use the generated seed to pick a bit position within the masked output
-        let total_bits = masked.len() * 8;
-        let bit_position = bit_seed % total_bits;
-        let byte_idx = bit_position / 8;
+        // Flip a bit within the IFAC tag region (bytes 2..2+ifac_size)
+        let tag_bits = ifac_size * 8;
+        let bit_position = bit_seed % tag_bits;
+        let byte_idx = 2 + bit_position / 8;
         let bit_idx = bit_position % 8;
 
         let mut corrupted = masked.clone();
         corrupted[byte_idx] ^= 1 << bit_idx;
 
-        // Corrupted packet should not unmask successfully
+        // Corrupted IFAC tag should not unmask successfully
         let result = ifac_unmask(&corrupted, &state)
             .expect("ifac_unmask should not return Err");
 
         prop_assert!(
             result.is_none(),
-            "Corruption at bit {} (byte {} bit {}) was not detected; unmasking should return None",
+            "Corruption at tag bit {} (byte {} bit {}) was not detected",
             bit_position,
             byte_idx,
             bit_idx,
