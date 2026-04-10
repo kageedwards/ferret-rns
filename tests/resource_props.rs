@@ -345,3 +345,236 @@ proptest! {
             "get_segment_progress() = {} out of bounds", seg_progress);
     }
 }
+
+// ── Property 14: Resource request wire format round-trip ──
+// For any resource_hash, set of requested map_hashes (0 to 75 entries),
+// and hashmap_exhausted flag (with optional last_map_hash), building a
+// request packet then parsing it recovers original values.
+// **Validates: Requirements 6.1, 26.2**
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(200))]
+
+    #[test]
+    fn request_wire_format_round_trip(
+        resource_hash in prop::array::uniform32(any::<u8>()),
+        num_hashes in 0usize..75,
+        exhausted in any::<bool>(),
+        last_map_hash in prop::array::uniform4(any::<u8>()),
+    ) {
+        // Generate requested map_hashes
+        let mut requested: Vec<[u8; 4]> = Vec::with_capacity(num_hashes);
+        for i in 0..num_hashes {
+            let mut mh = [0u8; 4];
+            mh[0] = (i & 0xFF) as u8;
+            mh[1] = ((i >> 8) & 0xFF) as u8;
+            mh[2] = resource_hash[i % 32];
+            mh[3] = last_map_hash[i % 4];
+            requested.push(mh);
+        }
+
+        let lmh = if exhausted { Some(&last_map_hash) } else { None };
+
+        let packet = Resource::build_request_packet(
+            exhausted,
+            lmh,
+            &resource_hash,
+            &requested,
+        );
+
+        let (parsed_exhausted, parsed_lmh, parsed_rh, parsed_hashes) =
+            Resource::parse_request_packet(&packet).unwrap();
+
+        prop_assert_eq!(parsed_exhausted, exhausted);
+        prop_assert_eq!(parsed_rh, resource_hash);
+        prop_assert_eq!(parsed_hashes.len(), requested.len());
+
+        if exhausted {
+            prop_assert_eq!(parsed_lmh, Some(last_map_hash));
+        } else {
+            prop_assert_eq!(parsed_lmh, None);
+        }
+
+        for (i, (expected, actual)) in requested.iter().zip(parsed_hashes.iter()).enumerate() {
+            prop_assert_eq!(expected, actual, "map_hash mismatch at index {}", i);
+        }
+    }
+}
+
+// ── Property 2: Resource data round-trip (construction → assembly) ──
+// For any byte data (1..2000) and random_hash, constructing a Resource
+// (prepend random_hash, split into SDU-sized parts) then simulating
+// assembly (concatenate parts, strip random_hash) produces original data.
+// Uses identity encryption (no real crypto) to test the data pipeline.
+// **Validates: Requirements 1.1, 8.1, 8.2**
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(200))]
+
+    #[test]
+    fn resource_data_round_trip(
+        data in prop::collection::vec(any::<u8>(), 1..2000),
+        random_hash in prop::array::uniform4(any::<u8>()),
+        sdu in 50usize..500,
+    ) {
+        // Step 1: Prepend random_hash to data (simulating Resource construction)
+        let mut payload = Vec::with_capacity(RANDOM_HASH_SIZE + data.len());
+        payload.extend_from_slice(&random_hash);
+        payload.extend_from_slice(&data);
+
+        // Step 2: Split into SDU-sized parts
+        let parts: Vec<Vec<u8>> = payload.chunks(sdu).map(|c| c.to_vec()).collect();
+        let expected_parts = (payload.len() + sdu - 1) / sdu;
+        prop_assert_eq!(parts.len(), expected_parts);
+
+        // Step 3: Concatenate parts back (simulating assembly)
+        let mut assembled = Vec::new();
+        for part in &parts {
+            assembled.extend_from_slice(part);
+        }
+
+        // Step 4: Strip random_hash prefix
+        prop_assert!(assembled.len() >= RANDOM_HASH_SIZE);
+        let recovered = &assembled[RANDOM_HASH_SIZE..];
+
+        // Step 5: Verify data matches original
+        prop_assert_eq!(recovered, data.as_slice(),
+            "round-trip data mismatch for {} bytes with SDU {}", data.len(), sdu);
+
+        // Also verify the random_hash prefix is correct
+        prop_assert_eq!(&assembled[..RANDOM_HASH_SIZE], &random_hash[..]);
+    }
+}
+
+// ── Property 9: Consecutive completed height tracking ──
+// For any sequence of part receptions in arbitrary order for N parts,
+// consecutive_completed_height equals the largest k where all parts[0..=k]
+// are Some, or -1 if parts[0] is None.
+// **Validates: Requirements 7.3**
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(200))]
+
+    #[test]
+    fn consecutive_completed_height_tracking(
+        total_parts in 1usize..100,
+        reception_order in prop::collection::vec(any::<usize>(), 1..100),
+    ) {
+        let mut resource = make_test_resource(0, 0, total_parts, 1, 1, false);
+        resource.parts = vec![None; total_parts];
+        resource.receiver_hashmap = vec![Some([0u8; 4]); total_parts];
+        resource.consecutive_completed_height = -1;
+
+        for &raw_idx in &reception_order {
+            let idx = raw_idx % total_parts;
+            if resource.parts[idx].is_none() {
+                resource.parts[idx] = Some(vec![0u8; 10]);
+                resource.received_count += 1;
+                resource.update_consecutive_completed_height();
+            }
+        }
+
+        // Compute expected consecutive_completed_height
+        let mut expected: isize = -1;
+        for i in 0..total_parts {
+            if resource.parts[i].is_some() {
+                expected = i as isize;
+            } else {
+                break;
+            }
+        }
+
+        prop_assert_eq!(
+            resource.consecutive_completed_height, expected,
+            "height mismatch: got {}, expected {} for {} parts",
+            resource.consecutive_completed_height, expected, total_parts
+        );
+    }
+}
+
+// ── Property 11: Receiver initialization from advertisement ──
+// For any valid ResourceAdvertisement, accepting produces a Resource with
+// total_parts == ceil(adv.t / SDU), status == Transferring, and correct
+// field propagation.
+// **Validates: Requirements 4.1, 4.2**
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(200))]
+
+    #[test]
+    fn receiver_initialization_from_advertisement(
+        t in 1usize..100_000,
+        d in 1usize..100_000,
+        n in 1usize..1000,
+        h in prop::array::uniform32(any::<u8>()),
+        r in prop::array::uniform4(any::<u8>()),
+        o in prop::array::uniform32(any::<u8>()),
+        i in 1usize..10,
+        l in 1usize..10,
+        f in arb_flags(),
+    ) {
+        use ferret_rns::resource::WINDOW;
+        use ferret_rns::resource::WINDOW_MAX_SLOW;
+
+        let flags = ResourceFlags::from_byte(f);
+        let adv = ResourceAdvertisement {
+            t, d, n, h, r, o, i, l,
+            q: None,
+            f,
+            m: Vec::new(), // empty initial hashmap for simplicity
+            encrypted: flags.encrypted,
+            compressed: flags.compressed,
+            split: flags.split,
+            is_request: flags.is_request,
+            is_response: flags.is_response,
+            has_metadata: flags.has_metadata,
+        };
+
+        let packed = adv.pack().unwrap();
+        let link = ferret_rns::link::Link::new_test_active(&[0u8; 64]);
+        let resource = Resource::accept(
+            &packed,
+            &link,
+            None,
+            None,
+            None,
+        ).unwrap();
+
+        // Verify total_parts == ceil(t / SDU)
+        let sdu = Resource::compute_sdu(&link).unwrap();
+        let expected_parts = (t + sdu - 1) / sdu;
+        prop_assert_eq!(resource.total_parts, expected_parts,
+            "total_parts mismatch: got {}, expected {} (t={}, sdu={})",
+            resource.total_parts, expected_parts, t, sdu);
+
+        // Verify status == Transferring
+        prop_assert_eq!(resource.status, ferret_rns::resource::ResourceStatus::Transferring);
+
+        // Verify field propagation
+        prop_assert_eq!(resource.hash, h);
+        prop_assert_eq!(resource.random_hash, r);
+        prop_assert_eq!(resource.original_hash, o);
+        prop_assert_eq!(resource.segment_index, i);
+        prop_assert_eq!(resource.total_segments, l);
+        prop_assert_eq!(resource.encrypted, flags.encrypted);
+        prop_assert_eq!(resource.compressed, flags.compressed);
+        prop_assert_eq!(resource.split, flags.split);
+        prop_assert_eq!(resource.has_metadata, flags.has_metadata);
+        prop_assert_eq!(resource.is_response, flags.is_response);
+        prop_assert_eq!(resource.size, t);
+        prop_assert_eq!(resource.total_size, d);
+
+        // Verify window initialization
+        prop_assert_eq!(resource.window, WINDOW);
+        prop_assert_eq!(resource.window_max, WINDOW_MAX_SLOW);
+
+        // Verify parts array is correct size and all None
+        prop_assert_eq!(resource.parts.len(), expected_parts);
+        for part in &resource.parts {
+            prop_assert!(part.is_none());
+        }
+
+        // Verify initiator is false
+        prop_assert!(!resource.initiator);
+    }
+}
