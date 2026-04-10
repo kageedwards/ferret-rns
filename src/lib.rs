@@ -12,5 +12,6 @@ pub mod buffer;
 pub mod resource;
 pub mod discovery;
 pub mod resolver;
+pub mod interfaces;
 
 pub use error::{FerretError, Result};
