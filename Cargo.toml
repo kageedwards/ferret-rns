@@ -22,16 +22,18 @@ bzip2 = "0.5"
 socket2 = "0.5"
 
 # Feature-gated optional dependencies
+bytes = { version = "1", optional = true }
 quinn = { version = "0.11", optional = true }
 rustls = { version = "0.23", optional = true }
 rcgen = { version = "0.13", optional = true }
+tokio = { version = "1", features = ["rt-multi-thread", "macros"], optional = true }
 serialport = { version = "4", optional = true }
 libloading = { version = "0.8", optional = true }
 mio = { version = "1", optional = true }
 
 [features]
 default = ["quic", "serial"]
-quic = ["dep:quinn", "dep:rustls", "dep:rcgen"]
+quic = ["dep:bytes", "dep:quinn", "dep:rustls", "dep:rcgen", "dep:tokio"]
 serial = ["dep:serialport"]
 plugins = ["dep:libloading"]
 backbone = ["dep:mio"]
