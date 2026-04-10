@@ -168,5 +168,6 @@ pub const MODE_DEFAULT: LinkMode = LinkMode::Aes256Cbc;
 /// Currently enabled encryption modes.
 pub const ENABLED_MODES: &[LinkMode] = &[LinkMode::Aes256Cbc];
 
-// Re-export Link (uncomment once implemented in link.rs):
-// pub use link::Link;
+// Re-exports
+pub use link::{Link, compute_mdu};
+pub use handshake::{signalling_bytes, mtu_from_signalling, mode_from_signalling};
