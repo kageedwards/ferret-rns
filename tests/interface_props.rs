@@ -226,3 +226,46 @@ proptest! {
         prop_assert_eq!(state1.ifac_signature, state2.ifac_signature, "ifac_signature mismatch");
     }
 }
+
+use ferret_rns::interfaces::ifac_processor::{ifac_mask, ifac_unmask, IFAC_FLAG};
+
+// ── Property 6: IFAC mask/unmask round-trip ──
+// For any raw Reticulum packet (≥ 2 bytes, ≤ MTU) and valid IFAC configuration
+// (ifac_size in 1..64), masking then unmasking produces the original raw packet.
+// **Validates: Requirements 3.3, 3.4, 3.5, 3.6, 3.10**
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(200))]
+
+    #[test]
+    fn ifac_mask_unmask_round_trip(
+        raw in prop::collection::vec(any::<u8>(), 2..=500),
+        ifac_size in 1usize..=32,
+        netname in ".*",
+        netkey in ".*",
+    ) {
+        let state = IfacState::derive(ifac_size, Some(&netname), Some(&netkey))
+            .expect("IFAC derivation should succeed");
+
+        // Clear the IFAC flag on the first byte to simulate a normal outbound packet
+        let mut raw = raw;
+        raw[0] &= !IFAC_FLAG;
+
+        let masked = ifac_mask(&raw, &state)
+            .expect("ifac_mask should succeed");
+
+        // The masked packet must have the IFAC flag set
+        prop_assert!(masked[0] & IFAC_FLAG == IFAC_FLAG, "IFAC flag must be set on masked packet");
+
+        // The masked packet should be larger by ifac_size bytes
+        prop_assert_eq!(masked.len(), raw.len() + ifac_size, "masked length mismatch");
+
+        let unmasked = ifac_unmask(&masked, &state)
+            .expect("ifac_unmask should succeed");
+
+        // Unmasking must succeed and produce the original raw packet
+        prop_assert!(unmasked.is_some(), "ifac_unmask returned None — round-trip failed");
+        let unmasked = unmasked.unwrap();
+        prop_assert_eq!(unmasked, raw, "unmasked packet does not match original");
+    }
+}
