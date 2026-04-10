@@ -88,4 +88,21 @@ pub enum FerretError {
     // Buffer errors
     #[error("invalid stream id: {0}")]
     InvalidStreamId(u16),
+
+    // Resource errors
+    #[error("resource failed: {0}")]
+    ResourceFailed(String),
+
+    #[error("resource corrupt: {0}")]
+    ResourceCorrupt(String),
+
+    #[error("resource rejected: {0}")]
+    ResourceRejected(String),
+
+    #[error("resource timeout: {0}")]
+    ResourceTimeout(String),
+
+    // Discovery errors
+    #[error("discovery error: {0}")]
+    DiscoveryError(String),
 }

@@ -9,5 +9,8 @@ pub mod transport;
 pub mod link;
 pub mod channel;
 pub mod buffer;
+pub mod resource;
+pub mod discovery;
+pub mod resolver;
 
 pub use error::{FerretError, Result};
