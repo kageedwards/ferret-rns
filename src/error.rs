@@ -105,4 +105,17 @@ pub enum FerretError {
     // Discovery errors
     #[error("discovery error: {0}")]
     DiscoveryError(String),
+
+    // Interface errors
+    #[error("interface error: {0}")]
+    InterfaceError(String),
+
+    #[error("interface connection failed: {0}")]
+    InterfaceConnectionFailed(String),
+
+    #[error("interface timeout: {0}")]
+    InterfaceTimeout(String),
+
+    #[error("plugin load error: {0}")]
+    PluginLoadError(String),
 }
