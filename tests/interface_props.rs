@@ -125,3 +125,66 @@ proptest! {
         prop_assert_eq!(&frames[0].data, &data);
     }
 }
+
+
+// ── Property 4: KISS streaming decoder correctness ──
+// For any sequence of N payloads (each ≤ HW_MTU), concatenating KISS
+// CMD_DATA-encoded frames and feeding through KissDecoder yields exactly
+// N decoded frames with command CMD_DATA matching originals; oversized
+// frames are discarded.
+// **Validates: Requirements 2.5, 2.6**
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(200))]
+
+    #[test]
+    fn kiss_streaming_decoder_correctness(
+        payloads in prop::collection::vec(
+            prop::collection::vec(any::<u8>(), 0..=200),
+            1..=10,
+        ),
+    ) {
+        let hw_mtu: usize = 150;
+
+        // Encode each payload as a KISS CMD_DATA frame and concatenate
+        let stream: Vec<u8> = payloads
+            .iter()
+            .flat_map(|p| kiss_codec::encode_data(p))
+            .collect();
+
+        // Feed the entire stream through the decoder
+        let mut decoder = KissDecoder::new(hw_mtu);
+        let decoded = decoder.feed(&stream);
+
+        // Filter originals to only those within MTU
+        let expected: Vec<&Vec<u8>> = payloads
+            .iter()
+            .filter(|p| p.len() <= hw_mtu)
+            .collect();
+
+        // Same count
+        prop_assert_eq!(
+            decoded.len(),
+            expected.len(),
+            "decoded frame count ({}) != expected ({})",
+            decoded.len(),
+            expected.len(),
+        );
+
+        // Same content, same order, all CMD_DATA
+        for (i, (dec, exp)) in decoded.iter().zip(expected.iter()).enumerate() {
+            prop_assert_eq!(
+                dec.command,
+                kiss_codec::CMD_DATA,
+                "frame {} command is not CMD_DATA",
+                i,
+            );
+            prop_assert_eq!(
+                &dec.data,
+                *exp,
+                "frame {} data mismatch",
+                i,
+            );
+        }
+    }
+}
