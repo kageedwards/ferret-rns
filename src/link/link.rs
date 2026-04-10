@@ -104,8 +104,8 @@ pub(crate) struct LinkInner {
     pub(crate) attached_interface: Option<usize>,
     pub(crate) remote_identity: Option<Identity>,
 
-    // Channel (placeholder)
-    // pub(crate) channel: Option<Channel>,
+    // Channel (lazily created)
+    pub(crate) channel: Option<crate::channel::Channel>,
 
     // Pending requests
     pub(crate) pending_requests: Vec<super::request::RequestReceipt>,
@@ -262,6 +262,7 @@ impl Link {
             owner: None,
             attached_interface: None,
             remote_identity: None,
+            channel: None,
             pending_requests: Vec::new(),
             callbacks,
         };
@@ -365,6 +366,7 @@ impl Link {
             owner: Some(owner),
             attached_interface: None,
             remote_identity: None,
+            channel: None,
             pending_requests: Vec::new(),
             callbacks: LinkCallbacks::new(),
         };
@@ -424,6 +426,32 @@ impl Link {
 
     pub fn mtu(&self) -> Result<usize> {
         Ok(self.read()?.mtu)
+    }
+
+    // ── Channel ──
+
+    /// Lazily create a Channel backed by LinkChannelOutlet, return mutable ref.
+    pub fn get_channel(&self) -> Result<()> {
+        let mut inner = self.write()?;
+        if inner.channel.is_none() {
+            let outlet = crate::channel::outlet::LinkChannelOutlet::new(self.clone());
+            inner.channel = Some(crate::channel::Channel::new(Box::new(outlet)));
+        }
+        Ok(())
+    }
+
+    /// Access the channel (must call get_channel first to ensure it exists).
+    pub fn with_channel<F, R>(&self, f: F) -> Result<R>
+    where
+        F: FnOnce(&mut crate::channel::Channel) -> R,
+    {
+        let mut inner = self.write()?;
+        if inner.channel.is_none() {
+            let outlet = crate::channel::outlet::LinkChannelOutlet::new(self.clone());
+            inner.channel = Some(crate::channel::Channel::new(Box::new(outlet)));
+        }
+        let channel = inner.channel.as_mut().expect("just ensured");
+        Ok(f(channel))
     }
 
     // ── Callback setters ──
@@ -547,6 +575,11 @@ impl Link {
             inner.shared_key = None;
             inner.derived_key = None;
             inner.token = None;
+
+            // Shut down channel if exists
+            if let Some(ref mut channel) = inner.channel {
+                channel.shutdown();
+            }
         }
 
         // Invoke link_closed callback
@@ -668,6 +701,7 @@ impl Link {
             owner: None,
             attached_interface: None,
             remote_identity: None,
+            channel: None,
             pending_requests: Vec::new(),
             callbacks: LinkCallbacks::new(),
         };

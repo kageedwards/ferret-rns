@@ -66,10 +66,15 @@ impl Link {
                 self.handle_response(packet)?;
             }
             PacketContext::Channel => {
-                // Prove packet, decrypt, pass to channel (placeholder)
+                // Prove packet, decrypt, pass to channel
                 self.prove_packet(packet, transport)?;
-                let _plaintext = self.decrypt(&packet.data)?;
-                // Channel dispatch will be added when Channel is implemented
+                let plaintext = self.decrypt(&packet.data)?;
+                if let Some(pt) = plaintext {
+                    let mut inner = self.write()?;
+                    if let Some(ref mut channel) = inner.channel {
+                        let _ = channel.receive(&pt);
+                    }
+                }
             }
             _ => {
                 // Unknown context, ignore

@@ -49,7 +49,8 @@ pub const SEQ_MAX: u16 = 0xFFFF;
 /// Max retransmission attempts per envelope.
 pub const MAX_TRIES: u8 = 5;
 
-// Re-export types (uncomment once implemented):
-// pub use channel::Channel;
-// pub use outlet::ChannelOutlet;
+// Re-export types
+pub use channel::Channel;
+pub use envelope::Envelope;
+pub use outlet::ChannelOutlet;
 pub use message::{MessageBase, MessageState, ChannelError, MessageFactory};
