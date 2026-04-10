@@ -1,3 +1,5 @@
+use crate::channel::message::ChannelError;
+
 /// Convenience alias used throughout the crate
 pub type Result<T> = std::result::Result<T, FerretError>;
 
@@ -65,4 +67,25 @@ pub enum FerretError {
 
     #[error("ratchet file error: {0}")]
     RatchetFile(String),
+
+    // Link errors
+    #[error("link establishment failed: {0}")]
+    LinkEstablishmentFailed(String),
+
+    #[error("link timeout: {0}")]
+    LinkTimeout(String),
+
+    #[error("invalid link mode: {0}")]
+    InvalidLinkMode(String),
+
+    #[error("invalid link proof: {0}")]
+    InvalidLinkProof(String),
+
+    // Channel errors
+    #[error("channel error: {0}")]
+    ChannelError(ChannelError),
+
+    // Buffer errors
+    #[error("invalid stream id: {0}")]
+    InvalidStreamId(u16),
 }

@@ -6,5 +6,8 @@ pub mod identity;
 pub mod destination;
 pub mod packet;
 pub mod transport;
+pub mod link;
+pub mod channel;
+pub mod buffer;
 
 pub use error::{FerretError, Result};
