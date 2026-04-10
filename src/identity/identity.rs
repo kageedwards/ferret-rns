@@ -3,7 +3,12 @@
 use crate::crypto::ed25519::{Ed25519SigningKey, Ed25519VerifyingKey};
 use crate::crypto::hashes::sha256;
 use crate::crypto::x25519::{X25519PrivateKey, X25519PublicKey};
+use crate::packet::packet::Packet;
+use crate::packet::Encryptable;
+use crate::transport::TransportState;
 use crate::types::constants::TRUNCATED_HASHLENGTH;
+use crate::types::packet::{ContextFlag, HeaderType, PacketContext, PacketType};
+use crate::types::transport::TransportType;
 use crate::{FerretError, Result};
 use std::path::Path;
 
@@ -336,6 +341,52 @@ impl Identity {
         let mut random_bytes = [0u8; 16];
         rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut random_bytes);
         Self::truncated_hash(&random_bytes)
+    }
+
+    /// Prove delivery of a received packet by signing its hash and sending a PROOF packet.
+    ///
+    /// If `destination` is None, a ProofDestination is generated from the packet.
+    /// Uses explicit proofs: packet_hash(32) + signature(64) = 96 bytes.
+    pub fn prove(
+        &self,
+        packet: &Packet,
+        destination: Option<&dyn Encryptable>,
+        transport: &TransportState,
+    ) -> Result<()> {
+        let packet_hash = packet.get_hash();
+        let signature = self.sign(&packet_hash)?;
+
+        // Explicit proof: hash(32) + signature(64) = 96 bytes
+        let mut proof_data = Vec::with_capacity(96);
+        proof_data.extend_from_slice(&packet_hash);
+        proof_data.extend_from_slice(&signature);
+
+        // Use provided destination or generate proof destination
+        let proof_dest;
+        let dest: &dyn Encryptable = match destination {
+            Some(d) => d,
+            None => {
+                proof_dest = packet.generate_proof_destination();
+                &proof_dest
+            }
+        };
+
+        // Create and send PROOF packet
+        let mut proof_packet = Packet::new(
+            dest,
+            proof_data,
+            PacketType::Proof,
+            PacketContext::None,
+            TransportType::Broadcast,
+            HeaderType::Header1,
+            None,
+            false,
+            ContextFlag::Unset,
+        );
+        proof_packet.pack(dest)?;
+        transport.outbound(&mut proof_packet)?;
+
+        Ok(())
     }
 }
 
