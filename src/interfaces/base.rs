@@ -134,10 +134,7 @@ impl Interface {
         name: String,
         transmit_fn: Option<Box<dyn Fn(&[u8]) -> Result<()> + Send + Sync>>,
     ) -> Self {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs_f64())
-            .unwrap_or(0.0);
+        let t = now();
 
         Self {
             name,
@@ -151,13 +148,13 @@ impl Interface {
             autoconfigure_mtu: false,
             rxb: AtomicU64::new(0),
             txb: AtomicU64::new(0),
-            created: now,
+            created: t,
             ifac_state: None,
             announce_cap: 0.0,
             announce_queue: Mutex::new(Vec::new()),
             ia_freq_deque: Mutex::new(VecDeque::with_capacity(IA_FREQ_SAMPLES)),
             oa_freq_deque: Mutex::new(VecDeque::with_capacity(OA_FREQ_SAMPLES)),
-            ingress_control: Mutex::new(IngressControl::new(now)),
+            ingress_control: Mutex::new(IngressControl::new(t)),
             parent_interface: None,
             transmit_fn,
             interface_hash: None,
@@ -201,11 +198,239 @@ impl Interface {
 
     /// Age of this interface in seconds since creation.
     pub fn age(&self) -> f64 {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_secs_f64())
-            .unwrap_or(0.0);
-        now - self.created
+        now() - self.created
+    }
+
+    // -----------------------------------------------------------------------
+    // Announce rate management (task 8.2)
+    // -----------------------------------------------------------------------
+
+    /// Record an incoming announce timestamp in the sliding window.
+    pub fn received_announce(&self) {
+        let mut deque = self.ia_freq_deque.lock().unwrap_or_else(|e| e.into_inner());
+        deque.push_back(now());
+        while deque.len() > IA_FREQ_SAMPLES {
+            deque.pop_front();
+        }
+    }
+
+    /// Record an outgoing announce timestamp in the sliding window.
+    pub fn sent_announce(&self) {
+        let mut deque = self.oa_freq_deque.lock().unwrap_or_else(|e| e.into_inner());
+        deque.push_back(now());
+        while deque.len() > OA_FREQ_SAMPLES {
+            deque.pop_front();
+        }
+    }
+
+    /// Compute incoming announce frequency from the sliding window.
+    ///
+    /// Matches the Python reference: sum of inter-sample deltas plus the
+    /// delta from the newest sample to now, divided into the sample count.
+    pub fn incoming_announce_frequency(&self) -> f64 {
+        let deque = self.ia_freq_deque.lock().unwrap_or_else(|e| e.into_inner());
+        announce_frequency_from_deque(&deque)
+    }
+
+    /// Compute outgoing announce frequency from the sliding window.
+    pub fn outgoing_announce_frequency(&self) -> f64 {
+        let deque = self.oa_freq_deque.lock().unwrap_or_else(|e| e.into_inner());
+        announce_frequency_from_deque(&deque)
+    }
+
+    /// Check whether ingress limiting should be active.
+    ///
+    /// Mirrors the Python `should_ingress_limit` logic:
+    /// - If already in burst and frequency has dropped below threshold for
+    ///   longer than IC_BURST_HOLD, deactivate burst and schedule penalty.
+    /// - If not in burst and frequency exceeds threshold, activate burst.
+    pub fn should_ingress_limit(&self) -> bool {
+        let mut ic = self.ingress_control.lock().unwrap_or_else(|e| e.into_inner());
+        let freq_threshold = if self.age() < IC_NEW_TIME {
+            IC_BURST_FREQ_NEW
+        } else {
+            IC_BURST_FREQ
+        };
+        let ia_freq = {
+            let deque = self.ia_freq_deque.lock().unwrap_or_else(|e| e.into_inner());
+            announce_frequency_from_deque(&deque)
+        };
+
+        if ic.in_burst {
+            if ia_freq < freq_threshold && now() > ic.burst_started + IC_BURST_HOLD {
+                ic.in_burst = false;
+                ic.last_held_release = now() + IC_BURST_PENALTY;
+            }
+            true
+        } else if ia_freq > freq_threshold {
+            ic.in_burst = true;
+            ic.burst_started = now();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Hold an announce packet for later release during burst mode.
+    pub fn hold_announce(&self, raw: Vec<u8>) {
+        let mut ic = self.ingress_control.lock().unwrap_or_else(|e| e.into_inner());
+        if ic.held_announces.len() < MAX_HELD_ANNOUNCES {
+            ic.held_announces.push((raw, now()));
+            ic.in_burst = true;
+            if ic.burst_started == 0.0 {
+                ic.burst_started = now();
+            }
+        }
+    }
+
+    /// Process held announces: release one if burst has subsided and the
+    /// penalty period has elapsed.
+    ///
+    /// Returns the raw packets that should be re-injected into transport.
+    pub fn process_held_announces(&self) -> Vec<Vec<u8>> {
+        let mut released = Vec::new();
+
+        // Check if we should still be limiting
+        if self.should_ingress_limit() {
+            return released;
+        }
+
+        let mut ic = self.ingress_control.lock().unwrap_or_else(|e| e.into_inner());
+        if ic.held_announces.is_empty() {
+            return released;
+        }
+
+        let current = now();
+        if current <= ic.last_held_release {
+            return released;
+        }
+
+        let freq_threshold = if self.age() < IC_NEW_TIME {
+            IC_BURST_FREQ_NEW
+        } else {
+            IC_BURST_FREQ
+        };
+        let ia_freq = {
+            let deque = self.ia_freq_deque.lock().unwrap_or_else(|e| e.into_inner());
+            announce_frequency_from_deque(&deque)
+        };
+
+        if ia_freq < freq_threshold {
+            // Select the held announce with minimum hops (we don't have hop
+            // info in held announces, so release oldest first — matching the
+            // Python reference which iterates the dict in insertion order and
+            // picks min hops; since we store raw bytes without parsed hops,
+            // we release the first entry).
+            if !ic.held_announces.is_empty() {
+                let (raw, _time) = ic.held_announces.remove(0);
+                ic.last_held_release = current + IC_HELD_RELEASE_INTERVAL;
+                released.push(raw);
+            }
+        }
+
+        released
+    }
+
+    /// Process the announce queue: transmit the lowest-hop announce, compute
+    /// wait time, remove stale entries.
+    ///
+    /// Returns `Some(wait_time)` if an announce was transmitted, `None` if
+    /// the queue is empty.
+    pub fn process_announce_queue(&self) -> Option<f64> {
+        let mut queue = self.announce_queue.lock().unwrap_or_else(|e| e.into_inner());
+
+        // Remove stale announces (older than QUEUED_ANNOUNCE_LIFE)
+        let current = now();
+        queue.retain(|entry| current - entry.time <= QUEUED_ANNOUNCE_LIFE);
+
+        if queue.is_empty() {
+            return None;
+        }
+
+        // Find entry with minimum hops (oldest first among ties)
+        let mut best_idx = 0;
+        let mut best_hops = queue[0].hops;
+        let mut best_time = queue[0].time;
+        for (i, entry) in queue.iter().enumerate().skip(1) {
+            if entry.hops < best_hops || (entry.hops == best_hops && entry.time < best_time) {
+                best_idx = i;
+                best_hops = entry.hops;
+                best_time = entry.time;
+            }
+        }
+
+        let selected = queue.remove(best_idx);
+
+        // Compute wait time: (packet_size_bits / bitrate) / announce_cap
+        let packet_size_bits = (selected.raw.len() as f64) * 8.0;
+        let bitrate = self.bitrate as f64;
+        let cap = if self.announce_cap > 0.0 {
+            self.announce_cap
+        } else {
+            1.0 // avoid division by zero
+        };
+        let tx_time = packet_size_bits / bitrate;
+        let wait_time = tx_time / cap;
+
+        // Update announce_allowed_at
+        {
+            let mut allowed = self.announce_allowed_at.lock().unwrap_or_else(|e| e.into_inner());
+            *allowed = current + wait_time;
+        }
+
+        // Transmit via transmit_fn
+        if let Some(ref f) = self.transmit_fn {
+            let _ = f(&selected.raw);
+        }
+
+        // Record outgoing announce
+        {
+            let mut deque = self.oa_freq_deque.lock().unwrap_or_else(|e| e.into_inner());
+            deque.push_back(current);
+            while deque.len() > OA_FREQ_SAMPLES {
+                deque.pop_front();
+            }
+        }
+
+        Some(wait_time)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// Get current UNIX timestamp as f64 seconds.
+fn now() -> f64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs_f64())
+        .unwrap_or(0.0)
+}
+
+/// Compute announce frequency from a deque of timestamps.
+///
+/// Matches the Python reference algorithm:
+/// ```python
+/// delta_sum = sum(deque[i] - deque[i-1] for i in range(1, len))
+/// delta_sum += time.time() - deque[-1]
+/// avg = 1 / (delta_sum / len) if delta_sum != 0 else 0
+/// ```
+fn announce_frequency_from_deque(deque: &VecDeque<f64>) -> f64 {
+    if deque.len() < 2 {
+        return 0.0;
+    }
+    let dq_len = deque.len();
+    let mut delta_sum = 0.0;
+    for i in 1..dq_len {
+        delta_sum += deque[i] - deque[i - 1];
+    }
+    delta_sum += now() - deque[dq_len - 1];
+
+    if delta_sum == 0.0 {
+        0.0
+    } else {
+        1.0 / (delta_sum / dq_len as f64)
     }
 }
 
