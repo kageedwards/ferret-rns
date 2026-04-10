@@ -477,3 +477,47 @@ proptest! {
         prop_assert_eq!(&tx_buf[0], &expected.0, "transmitted packet should be the one with min hops (oldest among ties)");
     }
 }
+
+
+// ── Property 10: RNode parameter validation ──
+// For any radio parameter tuple (frequency, bandwidth, spreading_factor,
+// coding_rate, tx_power), validation accepts if and only if all values
+// fall within the allowed ranges.
+// **Validates: Requirements 14.11**
+
+#[cfg(feature = "serial")]
+mod rnode_param_tests {
+    use proptest::prelude::*;
+    use ferret_rns::interfaces::rnode::{
+        validate_params, FREQ_MIN, FREQ_MAX, BW_MIN, BW_MAX, SF_MIN, SF_MAX, CR_MIN, CR_MAX,
+        TXPOWER_MAX,
+    };
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(200))]
+
+        #[test]
+        fn rnode_param_validation(
+            frequency in any::<u32>(),
+            bandwidth in any::<u32>(),
+            sf in any::<u8>(),
+            cr in any::<u8>(),
+            tx_power in any::<u8>(),
+        ) {
+            let result = validate_params(frequency, bandwidth, sf, cr, tx_power);
+
+            let all_in_range =
+                (FREQ_MIN..=FREQ_MAX).contains(&frequency)
+                && (BW_MIN..=BW_MAX).contains(&bandwidth)
+                && (SF_MIN..=SF_MAX).contains(&sf)
+                && (CR_MIN..=CR_MAX).contains(&cr)
+                && tx_power <= TXPOWER_MAX;
+
+            if all_in_range {
+                prop_assert!(result.is_ok(), "expected Ok for in-range params, got {:?}", result);
+            } else {
+                prop_assert!(result.is_err(), "expected Err for out-of-range params, got Ok");
+            }
+        }
+    }
+}
