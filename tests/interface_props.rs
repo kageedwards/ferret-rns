@@ -345,3 +345,56 @@ proptest! {
         prop_assert_eq!(hash1, hash2, "hashing the same string twice must produce identical results");
     }
 }
+
+
+// ── Property 9: MTU auto-configuration correctness ──
+// For any bitrate value, the auto-configured HW_MTU matches the expected
+// tier from the reference table.
+// **Validates: Requirements 4.7**
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(200))]
+
+    #[test]
+    fn mtu_auto_configuration_correctness(
+        bitrate in 0u64..=2_000_000_000,
+    ) {
+        let mut interface = Interface::new("test".into(), None);
+        interface.bitrate = bitrate;
+        interface.autoconfigure_mtu = true;
+        interface.optimise_mtu();
+
+        let expected = if bitrate >= 1_000_000_000 {
+            Some(524288)
+        } else if bitrate > 750_000_000 {
+            Some(262144)
+        } else if bitrate > 400_000_000 {
+            Some(131072)
+        } else if bitrate > 200_000_000 {
+            Some(65536)
+        } else if bitrate > 100_000_000 {
+            Some(32768)
+        } else if bitrate > 10_000_000 {
+            Some(16384)
+        } else if bitrate > 5_000_000 {
+            Some(8192)
+        } else if bitrate > 2_000_000 {
+            Some(4096)
+        } else if bitrate > 1_000_000 {
+            Some(2048)
+        } else if bitrate > 62_500 {
+            Some(1024)
+        } else {
+            None
+        };
+
+        prop_assert_eq!(
+            interface.hw_mtu,
+            expected,
+            "bitrate={}: expected hw_mtu={:?}, got {:?}",
+            bitrate,
+            expected,
+            interface.hw_mtu,
+        );
+    }
+}
