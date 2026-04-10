@@ -76,6 +76,34 @@ impl Link {
                     }
                 }
             }
+            PacketContext::ResourceAdv => {
+                // Incoming resource advertisement — handled by application layer
+                // via resource acceptance callback. Log/ignore at link level.
+            }
+            PacketContext::ResourceReq => {
+                // Forward to outgoing resource's handle_request.
+                // Requires resource registry lookup (deferred to full wiring).
+            }
+            PacketContext::Resource => {
+                // Forward to incoming resource's receive_part.
+                // Requires resource registry lookup (deferred to full wiring).
+            }
+            PacketContext::ResourceHmu => {
+                // Forward to incoming resource's hashmap_update_packet.
+                // Requires resource registry lookup (deferred to full wiring).
+            }
+            PacketContext::ResourcePrf => {
+                // Forward to outgoing resource's validate_proof.
+                // Requires resource registry lookup (deferred to full wiring).
+            }
+            PacketContext::ResourceIcl => {
+                // Cancel incoming resource.
+                // Requires resource registry lookup (deferred to full wiring).
+            }
+            PacketContext::ResourceRcl => {
+                // Cancel outgoing resource (rejected by remote).
+                // Requires resource registry lookup (deferred to full wiring).
+            }
             _ => {
                 // Unknown context, ignore
             }

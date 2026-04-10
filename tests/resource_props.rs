@@ -578,3 +578,170 @@ proptest! {
         prop_assert!(!resource.initiator);
     }
 }
+
+// ── Property 7: Window adaptation invariants ──
+// For any sequence of grow/shrink/rate-tier operations, window_min <= window <= window_max,
+// grow increases by at most 1, shrink decreases by at most 1.
+// **Validates: Requirements 9.2, 9.3, 9.4, 9.5, 6.5**
+
+#[derive(Debug, Clone)]
+enum WindowOp {
+    Grow,
+    Shrink,
+    RateTier(f64), // EIFR value to set before update_rate_tier
+}
+
+fn arb_window_op() -> impl Strategy<Value = WindowOp> {
+    prop_oneof![
+        Just(WindowOp::Grow),
+        Just(WindowOp::Shrink),
+        // Cover fast, normal, and very-slow EIFR ranges
+        prop_oneof![
+            (0.0..1000.0f64).prop_map(WindowOp::RateTier),       // very slow
+            (1000.0..50000.0f64).prop_map(WindowOp::RateTier),   // normal
+            (50001.0..1000000.0f64).prop_map(WindowOp::RateTier), // fast
+        ],
+    ]
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(200))]
+
+    #[test]
+    fn window_adaptation_invariants(
+        ops in prop::collection::vec(arb_window_op(), 1..50),
+    ) {
+        use ferret_rns::resource::{
+            WINDOW_MAX_FAST, WINDOW_MAX_VERY_SLOW,
+            FAST_RATE_THRESHOLD, VERY_SLOW_RATE_THRESHOLD,
+        };
+
+        let mut resource = make_test_resource(0, 0, 100, 1, 1, false);
+
+        for op in &ops {
+            let prev_window = resource.window;
+            let _prev_min = resource.window_min;
+            let _prev_max = resource.window_max;
+
+            match op {
+                WindowOp::Grow => {
+                    resource.grow_window();
+                    // Window increases by at most 1
+                    prop_assert!(
+                        resource.window <= prev_window + 1,
+                        "grow increased window by more than 1: {} -> {}",
+                        prev_window, resource.window
+                    );
+                    // Window doesn't exceed window_max
+                    prop_assert!(
+                        resource.window <= resource.window_max,
+                        "window {} exceeds window_max {} after grow",
+                        resource.window, resource.window_max
+                    );
+                }
+                WindowOp::Shrink => {
+                    resource.shrink_window();
+                    // Window decreases by at most 1
+                    prop_assert!(
+                        resource.window >= prev_window.saturating_sub(1),
+                        "shrink decreased window by more than 1: {} -> {}",
+                        prev_window, resource.window
+                    );
+                    // Window doesn't go below window_min
+                    prop_assert!(
+                        resource.window >= resource.window_min,
+                        "window {} below window_min {} after shrink",
+                        resource.window, resource.window_min
+                    );
+                }
+                WindowOp::RateTier(eifr_val) => {
+                    resource.eifr = Some(*eifr_val);
+                    resource.update_rate_tier();
+
+                    // Verify rate tier immediate effects
+                    if resource.fast_rate_rounds >= FAST_RATE_THRESHOLD {
+                        prop_assert!(
+                            resource.window_max >= WINDOW_MAX_FAST,
+                            "after {} fast rounds, window_max {} < WINDOW_MAX_FAST {}",
+                            resource.fast_rate_rounds, resource.window_max, WINDOW_MAX_FAST
+                        );
+                    }
+                    if resource.very_slow_rate_rounds >= VERY_SLOW_RATE_THRESHOLD {
+                        prop_assert!(
+                            resource.window_max <= WINDOW_MAX_VERY_SLOW,
+                            "after {} very-slow rounds, window_max {} > WINDOW_MAX_VERY_SLOW {}",
+                            resource.very_slow_rate_rounds, resource.window_max, WINDOW_MAX_VERY_SLOW
+                        );
+                    }
+                }
+            }
+
+            // Core invariant: window_min <= window <= window_max
+            prop_assert!(
+                resource.window_min <= resource.window,
+                "invariant violated: window_min {} > window {}",
+                resource.window_min, resource.window
+            );
+            prop_assert!(
+                resource.window <= resource.window_max,
+                "invariant violated: window {} > window_max {}",
+                resource.window, resource.window_max
+            );
+        }
+
+        // Rate tier thresholds are checked inline during RateTier ops above.
+        // After arbitrary sequences of grow/shrink/rate-tier, the core invariant
+        // window_min <= window <= window_max is the key property that must hold.
+    }
+}
+
+// ── Property 10: RTT smoothing bounds ──
+// For any current RTT and new measurement, updated RTT differs by at most 5%.
+// **Validates: Requirements 13.1, 13.2**
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(200))]
+
+    #[test]
+    fn rtt_smoothing_bounds(
+        current_rtt in 0.01f64..100.0,
+        new_rtt in 0.01f64..100.0,
+    ) {
+        let mut resource = make_test_resource(0, 0, 100, 1, 1, false);
+        resource.rtt = Some(current_rtt);
+
+        resource.update_rtt(new_rtt);
+
+        let updated = resource.rtt.unwrap();
+
+        if new_rtt < current_rtt {
+            // Decreased: updated >= current * 0.95
+            let lower_bound = current_rtt * 0.95;
+            prop_assert!(
+                updated >= lower_bound - 1e-10,
+                "RTT decreased too fast: current={}, new={}, updated={}, lower_bound={}",
+                current_rtt, new_rtt, updated, lower_bound
+            );
+            // But also updated <= current (it shouldn't increase when new < current)
+            prop_assert!(
+                updated <= current_rtt + 1e-10,
+                "RTT increased when new < current: current={}, new={}, updated={}",
+                current_rtt, new_rtt, updated
+            );
+        } else {
+            // Increased: updated <= current * 1.05
+            let upper_bound = current_rtt * 1.05;
+            prop_assert!(
+                updated <= upper_bound + 1e-10,
+                "RTT increased too fast: current={}, new={}, updated={}, upper_bound={}",
+                current_rtt, new_rtt, updated, upper_bound
+            );
+            // But also updated >= current (it shouldn't decrease when new > current)
+            prop_assert!(
+                updated >= current_rtt - 1e-10,
+                "RTT decreased when new > current: current={}, new={}, updated={}",
+                current_rtt, new_rtt, updated
+            );
+        }
+    }
+}

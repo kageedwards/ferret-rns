@@ -110,6 +110,12 @@ pub(crate) struct LinkInner {
     // Pending requests
     pub(crate) pending_requests: Vec<super::request::RequestReceipt>,
 
+    // Resource tracking
+    pub(crate) incoming_resources: Vec<[u8; 32]>,
+    pub(crate) outgoing_resources: Vec<[u8; 32]>,
+    pub(crate) last_resource_window: Option<usize>,
+    pub(crate) last_resource_eifr: Option<f64>,
+
     // Callbacks
     pub(crate) callbacks: LinkCallbacks,
 }
@@ -264,6 +270,10 @@ impl Link {
             remote_identity: None,
             channel: None,
             pending_requests: Vec::new(),
+            incoming_resources: Vec::new(),
+            outgoing_resources: Vec::new(),
+            last_resource_window: None,
+            last_resource_eifr: None,
             callbacks,
         };
 
@@ -368,6 +378,10 @@ impl Link {
             remote_identity: None,
             channel: None,
             pending_requests: Vec::new(),
+            incoming_resources: Vec::new(),
+            outgoing_resources: Vec::new(),
+            last_resource_window: None,
+            last_resource_eifr: None,
             callbacks: LinkCallbacks::new(),
         };
 
@@ -576,6 +590,10 @@ impl Link {
             inner.derived_key = None;
             inner.token = None;
 
+            // Clear all active resources
+            inner.incoming_resources.clear();
+            inner.outgoing_resources.clear();
+
             // Shut down channel if exists
             if let Some(ref mut channel) = inner.channel {
                 channel.shutdown();
@@ -703,6 +721,10 @@ impl Link {
             remote_identity: None,
             channel: None,
             pending_requests: Vec::new(),
+            incoming_resources: Vec::new(),
+            outgoing_resources: Vec::new(),
+            last_resource_window: None,
+            last_resource_eifr: None,
             callbacks: LinkCallbacks::new(),
         };
 
