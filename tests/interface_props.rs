@@ -398,3 +398,82 @@ proptest! {
         );
     }
 }
+
+
+use ferret_rns::interfaces::base::AnnounceQueueEntry;
+use std::sync::{Arc, Mutex as StdMutex};
+
+// ── Property 12: Announce queue processes lowest hops first ──
+// For any non-empty announce queue with varying hop counts, processing
+// selects the entry with minimum hops (oldest first among ties).
+// **Validates: Requirements 20.1, 20.2**
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(200))]
+
+    #[test]
+    fn announce_queue_ordering(
+        entries in prop::collection::vec(
+            (0u8..=7, 1usize..=100),
+            1..=10,
+        ),
+    ) {
+        // Shared buffer to capture what was transmitted
+        let transmitted: Arc<StdMutex<Vec<Vec<u8>>>> = Arc::new(StdMutex::new(Vec::new()));
+        let tx_clone = Arc::clone(&transmitted);
+
+        let transmit_fn: Box<dyn Fn(&[u8]) -> ferret_rns::Result<()> + Send + Sync> =
+            Box::new(move |data: &[u8]| {
+                tx_clone.lock().unwrap().push(data.to_vec());
+                Ok(())
+            });
+
+        let mut interface = Interface::new("test-announce".into(), Some(transmit_fn));
+        interface.announce_cap = 1.0;
+        interface.bitrate = 1_000_000;
+
+        // Build announce queue entries with sequential timestamps for deterministic ordering.
+        // Use timestamps close to now() so entries are not considered stale
+        // (process_announce_queue removes entries older than QUEUED_ANNOUNCE_LIFE = 86400s).
+        let base_time = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs_f64();
+
+        let mut queue_entries = Vec::new();
+        let mut raw_payloads: Vec<(Vec<u8>, u8, f64)> = Vec::new();
+        for (i, (hops, raw_len)) in entries.iter().enumerate() {
+            let raw: Vec<u8> = (0..*raw_len as u8).collect();
+            let time = base_time - 100.0 + (i as f64); // sequential, recent timestamps
+            raw_payloads.push((raw.clone(), *hops, time));
+            queue_entries.push(AnnounceQueueEntry {
+                raw,
+                hops: *hops,
+                time,
+            });
+        }
+
+        // Populate the announce queue
+        {
+            let mut queue = interface.announce_queue.lock().unwrap();
+            *queue = queue_entries;
+        }
+
+        // Process the announce queue (transmits the best entry)
+        let result = interface.process_announce_queue();
+        prop_assert!(result.is_some(), "process_announce_queue should return Some for non-empty queue");
+
+        // Determine expected: minimum hops, oldest time among ties
+        let min_hops = raw_payloads.iter().map(|(_, h, _)| *h).min().unwrap();
+        let expected = raw_payloads
+            .iter()
+            .filter(|(_, h, _)| *h == min_hops)
+            .min_by(|a, b| a.2.partial_cmp(&b.2).unwrap())
+            .unwrap();
+
+        // Check that the transmitted packet matches the expected one
+        let tx_buf = transmitted.lock().unwrap();
+        prop_assert_eq!(tx_buf.len(), 1, "exactly one packet should be transmitted");
+        prop_assert_eq!(&tx_buf[0], &expected.0, "transmitted packet should be the one with min hops (oldest among ties)");
+    }
+}
