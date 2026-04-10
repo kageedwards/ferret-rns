@@ -44,4 +44,8 @@ pub const DESTINATION_TIMEOUT: u64 = 604_800;
 pub const MAX_RECEIPTS: usize = 1024;
 
 // Re-exports (uncomment as types are implemented):
-// pub use transport::TransportState;
+pub use transport::TransportState;
+pub use transport::{
+    ActiveLink, AnnounceEntry, AnnounceHandler, LinkEntry, PathEntry, PendingLink, ReverseEntry,
+};
+pub use hashlist::PacketHashlist;
