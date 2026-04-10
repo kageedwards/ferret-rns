@@ -321,3 +321,27 @@ proptest! {
         );
     }
 }
+
+
+use ferret_rns::interfaces::base::Interface;
+
+// ── Property 8: Interface hash determinism ──
+// For any interface display string, computing the interface hash twice
+// produces the same 32-byte result.
+// **Validates: Requirements 4.5**
+
+proptest! {
+    #![proptest_config(ProptestConfig::with_cases(200))]
+
+    #[test]
+    fn interface_hash_determinism(
+        display_string in ".*",
+    ) {
+        let hash1 = Interface::compute_hash(&display_string);
+        let hash2 = Interface::compute_hash(&display_string);
+
+        prop_assert_eq!(hash1.len(), 32, "hash must be 32 bytes");
+        prop_assert_eq!(hash2.len(), 32, "hash must be 32 bytes");
+        prop_assert_eq!(hash1, hash2, "hashing the same string twice must produce identical results");
+    }
+}
