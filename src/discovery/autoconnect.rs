@@ -1,9 +1,12 @@
 // Auto-connect logic and interface monitoring
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::crypto::hashes::sha256;
-use crate::Result;
+use crate::interfaces::tcp_client::TCPClientInterface;
+use crate::transport::{InterfaceHandle, TransportState};
+use crate::{FerretError, Result};
 
 /// Monitor interval for checking interface status (seconds).
 pub const MONITOR_INTERVAL: u64 = 5;
@@ -13,13 +16,14 @@ pub const DETACH_THRESHOLD: u64 = 12;
 pub const DEFAULT_MAX_AUTOCONNECTED: usize = 5;
 
 /// State for an auto-connected interface.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct AutoconnectedInterface {
     pub autoconnect_hash: [u8; 32],
     pub endpoint: String,
     pub connected: bool,
     pub last_seen: f64,
-    pub interface_index: Option<usize>,
+    /// The interface handle registered with TransportState (if connected).
+    pub interface_handle: Option<Arc<dyn InterfaceHandle>>,
 }
 
 /// Manages auto-connection to discovered transport interfaces.
@@ -28,17 +32,19 @@ pub struct AutoconnectManager {
     autoconnected: HashMap<[u8; 32], AutoconnectedInterface>,
     bootstrap_active: bool,
     monitoring: bool,
+    transport: TransportState,
 }
 
 impl AutoconnectManager {
     /// Create a new auto-connect manager.
-    pub fn new(max_autoconnected: Option<usize>) -> Self {
+    pub fn new(max_autoconnected: Option<usize>, transport: TransportState) -> Self {
         Self {
             max_autoconnected: max_autoconnected
                 .unwrap_or(DEFAULT_MAX_AUTOCONNECTED),
             autoconnected: HashMap::new(),
             bootstrap_active: false,
             monitoring: false,
+            transport,
         }
     }
 
@@ -62,42 +68,61 @@ impl AutoconnectManager {
 
     /// Attempt initial auto-connect to previously discovered interfaces.
     ///
-    /// Stub: In a full implementation, this would iterate discovered
-    /// transport interfaces and create BackboneInterface connections.
-    /// Actual interface creation is deferred to Layer 6.
+    /// Creates real TCPClientInterface connections for discovered transport
+    /// interfaces and registers them with TransportState.
     pub fn initial_autoconnect(
         &mut self,
-        _discovered: &[super::handler::DiscoveredInterfaceInfo],
+        discovered: &[super::handler::DiscoveredInterfaceInfo],
     ) -> Result<Vec<String>> {
         let mut connected = Vec::new();
 
-        for info in _discovered.iter().take(self.max_autoconnected) {
+        for info in discovered.iter().take(self.max_autoconnected) {
             if !info.transport {
                 continue;
             }
             if let Some(ref endpoint) = info.reachable_on {
                 let hash = Self::autoconnect_hash(endpoint);
-                if !self.autoconnected.contains_key(&hash) {
-                    let now = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .map(|d| d.as_secs_f64())
-                        .unwrap_or(0.0);
+                if self.autoconnected.contains_key(&hash) {
+                    continue;
+                }
 
-                    self.autoconnected.insert(
-                        hash,
-                        AutoconnectedInterface {
-                            autoconnect_hash: hash,
-                            endpoint: endpoint.clone(),
-                            connected: false, // stub: not actually connected
-                            last_seen: now,
-                            interface_index: None,
-                        },
-                    );
-                    connected.push(endpoint.clone());
+                let port = info.port.unwrap_or(4242);
+                let name = format!("AutoTCP/{}", endpoint);
 
-                    if !self.has_available_slots() {
-                        break;
+                match Self::create_and_register_interface(
+                    endpoint,
+                    port,
+                    &name,
+                    &self.transport,
+                ) {
+                    Ok(handle) => {
+                        let now = std::time::SystemTime::now()
+                            .duration_since(std::time::UNIX_EPOCH)
+                            .map(|d| d.as_secs_f64())
+                            .unwrap_or(0.0);
+
+                        self.autoconnected.insert(
+                            hash,
+                            AutoconnectedInterface {
+                                autoconnect_hash: hash,
+                                endpoint: endpoint.clone(),
+                                connected: true,
+                                last_seen: now,
+                                interface_handle: Some(handle),
+                            },
+                        );
+                        connected.push(endpoint.clone());
                     }
+                    Err(e) => {
+                        eprintln!(
+                            "Warning: autoconnect to {} failed: {}",
+                            endpoint, e
+                        );
+                    }
+                }
+
+                if !self.has_available_slots() {
+                    break;
                 }
             }
         }
@@ -107,7 +132,7 @@ impl AutoconnectManager {
 
     /// Try to auto-connect a newly discovered interface.
     ///
-    /// Stub: actual interface creation deferred to Layer 6.
+    /// Creates a real TCPClientInterface and registers it with TransportState.
     pub fn try_autoconnect(
         &mut self,
         info: &super::handler::DiscoveredInterfaceInfo,
@@ -118,23 +143,44 @@ impl AutoconnectManager {
 
         if let Some(ref endpoint) = info.reachable_on {
             let hash = Self::autoconnect_hash(endpoint);
-            if !self.autoconnected.contains_key(&hash) {
-                let now = std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .map(|d| d.as_secs_f64())
-                    .unwrap_or(0.0);
+            if self.autoconnected.contains_key(&hash) {
+                return Ok(false);
+            }
 
-                self.autoconnected.insert(
-                    hash,
-                    AutoconnectedInterface {
-                        autoconnect_hash: hash,
-                        endpoint: endpoint.clone(),
-                        connected: false,
-                        last_seen: now,
-                        interface_index: None,
-                    },
-                );
-                return Ok(true);
+            let port = info.port.unwrap_or(4242);
+            let name = format!("AutoTCP/{}", endpoint);
+
+            match Self::create_and_register_interface(
+                endpoint,
+                port,
+                &name,
+                &self.transport,
+            ) {
+                Ok(handle) => {
+                    let now = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|d| d.as_secs_f64())
+                        .unwrap_or(0.0);
+
+                    self.autoconnected.insert(
+                        hash,
+                        AutoconnectedInterface {
+                            autoconnect_hash: hash,
+                            endpoint: endpoint.clone(),
+                            connected: true,
+                            last_seen: now,
+                            interface_handle: Some(handle),
+                        },
+                    );
+                    return Ok(true);
+                }
+                Err(e) => {
+                    eprintln!(
+                        "Warning: autoconnect to {} failed: {}",
+                        endpoint, e
+                    );
+                    return Ok(false);
+                }
             }
         }
 
@@ -144,7 +190,8 @@ impl AutoconnectManager {
     /// Monitor auto-connected interfaces, detaching those that have been
     /// disconnected longer than DETACH_THRESHOLD.
     ///
-    /// Returns the endpoints that were detached.
+    /// Removes detached interfaces from TransportState. Returns the endpoints
+    /// that were detached.
     pub fn monitor_interfaces(&mut self) -> Vec<String> {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
@@ -152,17 +199,30 @@ impl AutoconnectManager {
             .unwrap_or(0.0);
 
         let mut detached = Vec::new();
+        let mut hashes_to_remove: Vec<[u8; 32]> = Vec::new();
 
-        self.autoconnected.retain(|_, iface| {
+        // Collect interfaces that need detaching
+        for (hash, iface) in &self.autoconnected {
             if !iface.connected {
                 let down_time = now - iface.last_seen;
                 if down_time > DETACH_THRESHOLD as f64 {
                     detached.push(iface.endpoint.clone());
-                    return false;
+                    hashes_to_remove.push(*hash);
                 }
             }
-            true
-        });
+        }
+
+        // Remove from TransportState and local map
+        for hash in &hashes_to_remove {
+            if let Some(entry) = self.autoconnected.remove(hash) {
+                if let Some(ref handle) = entry.interface_handle {
+                    let iface_hash = handle.interface_hash().to_vec();
+                    if let Ok(mut inner) = self.transport.write() {
+                        inner.interfaces.retain(|h| h.interface_hash() != iface_hash.as_slice());
+                    }
+                }
+            }
+        }
 
         detached
     }
@@ -202,5 +262,32 @@ impl AutoconnectManager {
     /// Check if monitoring is active.
     pub fn is_monitoring(&self) -> bool {
         self.monitoring
+    }
+
+    /// Create a TCPClientInterface, wire it to TransportState, and register it.
+    ///
+    /// Returns the `Arc<dyn InterfaceHandle>` for the newly created interface.
+    fn create_and_register_interface(
+        target_ip: &str,
+        target_port: u16,
+        name: &str,
+        transport: &TransportState,
+    ) -> Result<Arc<dyn InterfaceHandle>> {
+        let iface = TCPClientInterface::connect(
+            target_ip.to_string(),
+            target_port,
+            name.to_string(),
+            false, // kiss_framing
+            false, // i2p_tunneled
+            None,  // max_reconnect_tries
+        )?;
+
+        let handle: Arc<dyn InterfaceHandle> = iface.base.clone();
+        iface.base.set_transport(transport.clone(), handle.clone());
+        transport.write().map_err(|e| {
+            FerretError::Token(format!("failed to lock transport for interface registration: {}", e))
+        })?.interfaces.push(handle.clone());
+
+        Ok(handle)
     }
 }
