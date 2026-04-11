@@ -27,7 +27,7 @@ pub const GRACIOUS_PERSIST_INTERVAL: u64 = 300;
 
 /// Serializable subset of a path table entry (no interface reference).
 #[derive(Serialize, Deserialize)]
-struct SerializedPathEntry {
+pub(crate) struct SerializedPathEntry {
     pub timestamp: f64,
     pub received_from: [u8; 16],
     pub hops: u8,

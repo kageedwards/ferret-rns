@@ -283,6 +283,9 @@ impl Reticulum {
             &reticulum.transport_state,
         )?;
 
+        // Load persisted path table (after interface synthesis so we can match interfaces)
+        load_path_table(&reticulum.transport_state, &reticulum.paths.storagepath);
+
         // RPC server (shared instance only)
         if reticulum.is_shared_instance {
             let rpc_key = reticulum.rpc_key.clone().unwrap_or_else(|| {
@@ -367,6 +370,79 @@ impl Reticulum {
         // TODO (task 17): detach all registered interfaces
         // TODO (task 17): persist transport state
         // TODO (task 17): persist identity state
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Path table load on startup
+// ---------------------------------------------------------------------------
+
+/// Load a persisted path table from `storagepath/path_table` into TransportState.
+///
+/// Each entry is deserialized from MessagePack and inserted into the path table
+/// with the first registered interface as the receiving interface. Entries are
+/// skipped if no interfaces are registered. Errors are logged and ignored
+/// (non-fatal).
+fn load_path_table(transport: &TransportState, storagepath: &Path) {
+    let path_table_file = storagepath.join("path_table");
+    if !path_table_file.exists() {
+        return;
+    }
+
+    let result = (|| -> Result<()> {
+        let data = std::fs::read(&path_table_file).map_err(|e| {
+            FerretError::Io(std::io::Error::new(
+                e.kind(),
+                format!("failed to read path table {}: {}", path_table_file.display(), e),
+            ))
+        })?;
+
+        let entries: HashMap<[u8; 16], crate::reticulum::jobs::SerializedPathEntry> =
+            crate::util::msgpack::deserialize(&data)?;
+
+        let mut inner = transport.write()?;
+
+        // Need at least one interface to assign as receiving_interface
+        let first_iface = match inner.interfaces.first() {
+            Some(iface) => Arc::clone(iface),
+            None => {
+                // No interfaces registered yet — skip loading
+                if !entries.is_empty() {
+                    eprintln!(
+                        "Warning: skipping path table load ({} entries) — no interfaces registered",
+                        entries.len()
+                    );
+                }
+                return Ok(());
+            }
+        };
+
+        let mut loaded = 0usize;
+        for (dest_hash, entry) in entries {
+            inner.path_table.insert(
+                dest_hash,
+                crate::transport::PathEntry {
+                    timestamp: entry.timestamp,
+                    received_from: entry.received_from,
+                    hops: entry.hops,
+                    expires: entry.expires,
+                    random_blobs: entry.random_blobs,
+                    receiving_interface: Arc::clone(&first_iface),
+                    packet_hash: entry.packet_hash,
+                },
+            );
+            loaded += 1;
+        }
+
+        if loaded > 0 {
+            eprintln!("Loaded {} path table entries from disk", loaded);
+        }
+
+        Ok(())
+    })();
+
+    if let Err(e) = result {
+        eprintln!("Warning: failed to load path table: {}", e);
     }
 }
 
