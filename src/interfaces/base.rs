@@ -4,11 +4,12 @@
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use crate::crypto::sha256;
 use crate::interfaces::ifac_processor::{ifac_check, ifac_mask, ifac_unmask, IfacState};
 use crate::transport::InterfaceHandle;
+use crate::transport::TransportState;
 use crate::types::InterfaceMode;
 use crate::Result;
 
@@ -114,6 +115,12 @@ pub struct Interface {
     // Parent interface (index/handle)
     pub parent_interface: Option<usize>,
 
+    // Transport wiring
+    /// Reference to the global transport state for inbound delivery.
+    pub transport: Option<TransportState>,
+    /// Self-reference as InterfaceHandle for passing to TransportState::inbound().
+    pub self_handle: Option<Arc<dyn InterfaceHandle>>,
+
     // Transmit callback — set by concrete interface
     transmit_fn: Option<Box<dyn Fn(&[u8]) -> Result<()> + Send + Sync>>,
 
@@ -156,6 +163,8 @@ impl Interface {
             oa_freq_deque: Mutex::new(VecDeque::with_capacity(OA_FREQ_SAMPLES)),
             ingress_control: Mutex::new(IngressControl::new(t)),
             parent_interface: None,
+            transport: None,
+            self_handle: None,
             transmit_fn,
             interface_hash: None,
             announce_allowed_at: Mutex::new(0.0),
@@ -165,6 +174,13 @@ impl Interface {
     /// Compute interface hash = SHA-256 of the display string's UTF-8 bytes.
     pub fn compute_hash(display_string: &str) -> Vec<u8> {
         sha256(display_string.as_bytes()).to_vec()
+    }
+
+    /// Wire this interface to a TransportState and store a self-handle for
+    /// passing to `TransportState::inbound()` during packet processing.
+    pub fn set_transport(&mut self, ts: TransportState, handle: Arc<dyn InterfaceHandle>) {
+        self.transport = Some(ts);
+        self.self_handle = Some(handle);
     }
 
     /// Auto-configure HW_MTU based on bitrate tiers (matching Python reference).
