@@ -218,6 +218,31 @@ impl Reticulum {
         };
         let transport_identity = load_or_create_identity(&identity_path)?;
 
+        // 6. Create and configure TransportState
+        let transport_state = TransportState::new();
+        {
+            let transport_identity_copy =
+                Identity::from_private_key(&transport_identity.get_private_key()?)?;
+            let mut inner = transport_state.write()?;
+            inner.identity = Some(transport_identity_copy);
+            inner.transport_enabled = ret_sec.enable_transport;
+        }
+
+        // 7. Create IdentityStore and load from disk if file exists
+        let identity_store = Arc::new(IdentityStore::new());
+        let known_dest_path = paths.storagepath.join("known_destinations");
+        if known_dest_path.exists() {
+            if let Err(e) = identity_store.load(&known_dest_path) {
+                eprintln!("Warning: failed to load known destinations: {}", e);
+            }
+        }
+
+        // 8. Create RatchetStore and clean expired ratchets
+        let ratchet_store = Arc::new(RatchetStore::new(paths.storagepath.join("ratchets")));
+        if let Err(e) = ratchet_store.clean_ratchets() {
+            eprintln!("Warning: failed to clean ratchets: {}", e);
+        }
+
         let mut reticulum = Reticulum {
             paths: paths.clone(),
             is_shared_instance: false,
@@ -237,9 +262,9 @@ impl Reticulum {
             local_control_port: ret_sec.instance_control_port,
             rpc_key: ret_sec.rpc_key.clone(),
             transport_identity,
-            transport_state: TransportState::new(),
-            identity_store: Arc::new(IdentityStore::new()),
-            ratchet_store: Arc::new(RatchetStore::new(paths.storagepath.join("ratchets"))),
+            transport_state,
+            identity_store,
+            ratchet_store,
             shared_instance_interface: None,
             shutdown: Arc::new(AtomicBool::new(false)),
             exit_ran: AtomicBool::new(false),
