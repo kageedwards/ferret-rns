@@ -566,4 +566,20 @@ impl InterfaceHandle for Interface {
             None => &[],
         }
     }
+
+    fn name(&self) -> &str {
+        &self.name
+    }
+
+    fn rxb(&self) -> u64 {
+        self.rxb.load(Ordering::Relaxed)
+    }
+
+    fn txb(&self) -> u64 {
+        self.txb.load(Ordering::Relaxed)
+    }
+
+    fn is_online(&self) -> bool {
+        self.online.load(Ordering::Relaxed)
+    }
 }

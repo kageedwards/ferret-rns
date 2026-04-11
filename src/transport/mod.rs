@@ -27,6 +27,14 @@ pub trait InterfaceHandle: Send + Sync {
     fn mode(&self) -> InterfaceMode;
     /// Unique hash identifying this interface.
     fn interface_hash(&self) -> &[u8];
+    /// Human-readable interface name (for RPC stats).
+    fn name(&self) -> &str { "" }
+    /// Total bytes received on this interface.
+    fn rxb(&self) -> u64 { 0 }
+    /// Total bytes transmitted on this interface.
+    fn txb(&self) -> u64 { 0 }
+    /// Whether this interface is currently online.
+    fn is_online(&self) -> bool { false }
 }
 
 // Transport constants

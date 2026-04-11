@@ -147,30 +147,10 @@ impl RpcServer {
     fn dispatch(&self, req: &RpcRequest) -> RpcResponse {
         if let Some(ref cmd) = req.get {
             match cmd.as_str() {
-                "path_table" => RpcResponse {
-                    ok: true,
-                    error: None,
-                    count: None,
-                    entries: Some(vec![]),
-                },
-                "interface_stats" => RpcResponse {
-                    ok: true,
-                    error: None,
-                    count: None,
-                    entries: Some(vec![]),
-                },
-                "rate_table" => RpcResponse {
-                    ok: true,
-                    error: None,
-                    count: None,
-                    entries: Some(vec![]),
-                },
-                "link_count" => RpcResponse {
-                    ok: true,
-                    error: None,
-                    count: Some(0),
-                    entries: None,
-                },
+                "path_table" => self.dispatch_get_path_table(req),
+                "interface_stats" => self.dispatch_get_interface_stats(),
+                "rate_table" => self.dispatch_get_rate_table(),
+                "link_count" => self.dispatch_get_link_count(),
                 _ => RpcResponse {
                     ok: false,
                     error: Some(format!("unknown get command: {cmd}")),
@@ -180,12 +160,8 @@ impl RpcServer {
             }
         } else if let Some(ref cmd) = req.drop {
             match cmd.as_str() {
-                "path" | "announce_queues" => RpcResponse {
-                    ok: true,
-                    error: None,
-                    count: None,
-                    entries: None,
-                },
+                "path" => self.dispatch_drop_path(req),
+                "announce_queues" => self.dispatch_drop_announce_queues(),
                 _ => RpcResponse {
                     ok: false,
                     error: Some(format!("unknown drop command: {cmd}")),
@@ -200,6 +176,150 @@ impl RpcServer {
                 count: None,
                 entries: None,
             }
+        }
+    }
+
+    fn dispatch_get_path_table(&self, req: &RpcRequest) -> RpcResponse {
+        let inner = match self.transport.read() {
+            Ok(guard) => guard,
+            Err(e) => return Self::error_response(format!("transport read error: {e}")),
+        };
+        let max_hops = req.max_hops.unwrap_or(u8::MAX);
+        let mut entries = Vec::new();
+        for (dest_hash, entry) in &inner.path_table {
+            if entry.hops > max_hops {
+                continue;
+            }
+            let iface_hash = entry.receiving_interface.interface_hash().to_vec();
+            let row: (Vec<u8>, u8, f64, f64, Vec<u8>) = (
+                dest_hash.to_vec(),
+                entry.hops,
+                entry.timestamp,
+                entry.expires,
+                iface_hash,
+            );
+            match rmp_serde::to_vec(&row) {
+                Ok(bytes) => entries.push(bytes),
+                Err(e) => return Self::error_response(format!("serialize path entry: {e}")),
+            }
+        }
+        RpcResponse {
+            ok: true,
+            error: None,
+            count: None,
+            entries: Some(entries),
+        }
+    }
+
+    fn dispatch_get_interface_stats(&self) -> RpcResponse {
+        let inner = match self.transport.read() {
+            Ok(guard) => guard,
+            Err(e) => return Self::error_response(format!("transport read error: {e}")),
+        };
+        let mut entries = Vec::new();
+        for iface in &inner.interfaces {
+            let row: (String, u64, u64, bool, u8) = (
+                iface.name().to_string(),
+                iface.rxb(),
+                iface.txb(),
+                iface.is_online(),
+                iface.mode() as u8,
+            );
+            match rmp_serde::to_vec(&row) {
+                Ok(bytes) => entries.push(bytes),
+                Err(e) => return Self::error_response(format!("serialize interface stat: {e}")),
+            }
+        }
+        RpcResponse {
+            ok: true,
+            error: None,
+            count: None,
+            entries: Some(entries),
+        }
+    }
+
+    fn dispatch_get_rate_table(&self) -> RpcResponse {
+        let inner = match self.transport.read() {
+            Ok(guard) => guard,
+            Err(e) => return Self::error_response(format!("transport read error: {e}")),
+        };
+        let mut entries = Vec::new();
+        for (dest_hash, timestamps) in &inner.announce_rate_table {
+            let row: (Vec<u8>, Vec<f64>) = (dest_hash.to_vec(), timestamps.clone());
+            match rmp_serde::to_vec(&row) {
+                Ok(bytes) => entries.push(bytes),
+                Err(e) => return Self::error_response(format!("serialize rate entry: {e}")),
+            }
+        }
+        RpcResponse {
+            ok: true,
+            error: None,
+            count: None,
+            entries: Some(entries),
+        }
+    }
+
+    fn dispatch_get_link_count(&self) -> RpcResponse {
+        let inner = match self.transport.read() {
+            Ok(guard) => guard,
+            Err(e) => return Self::error_response(format!("transport read error: {e}")),
+        };
+        let count = (inner.pending_links.len() + inner.active_links.len()) as u64;
+        RpcResponse {
+            ok: true,
+            error: None,
+            count: Some(count),
+            entries: None,
+        }
+    }
+
+    fn dispatch_drop_path(&self, req: &RpcRequest) -> RpcResponse {
+        let dest_hash_bytes = match req.destination_hash.as_ref() {
+            Some(h) => h,
+            None => {
+                return Self::error_response("drop path requires destination_hash".into());
+            }
+        };
+        if dest_hash_bytes.len() != 16 {
+            return Self::error_response(format!(
+                "destination_hash must be 16 bytes, got {}",
+                dest_hash_bytes.len()
+            ));
+        }
+        let mut dest_hash = [0u8; 16];
+        dest_hash.copy_from_slice(dest_hash_bytes);
+        match self.transport.expire_path(&dest_hash) {
+            Ok(()) => RpcResponse {
+                ok: true,
+                error: None,
+                count: None,
+                entries: None,
+            },
+            Err(e) => Self::error_response(format!("expire_path error: {e}")),
+        }
+    }
+
+    fn dispatch_drop_announce_queues(&self) -> RpcResponse {
+        match self.transport.write() {
+            Ok(mut inner) => {
+                inner.announce_table.clear();
+                RpcResponse {
+                    ok: true,
+                    error: None,
+                    count: None,
+                    entries: None,
+                }
+            }
+            Err(e) => Self::error_response(format!("transport write error: {e}")),
+        }
+    }
+
+    fn error_response(msg: String) -> RpcResponse {
+        RpcResponse {
+            ok: false,
+            error: Some(msg),
+            count: None,
+            entries: None,
         }
     }
 
