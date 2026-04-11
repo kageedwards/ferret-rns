@@ -154,10 +154,12 @@ impl Reticulum {
     /// 2. Create storage directories
     /// 3. Read or generate config file
     /// 4. Apply config values
-    /// 5. Return Arc<Self>
-    ///
-    /// Transport init, shared instance, interface synthesis, RPC, and jobs
-    /// are deferred to later tasks (7, 9, 10, 11, 13).
+    /// 5. Load or create transport identity
+    /// 6. Set up shared instance (server, client, or standalone)
+    /// 7. Synthesize interfaces from config
+    /// 8. Start RPC server (if shared instance)
+    /// 9. Start background jobs thread
+    /// 10. Return Arc<Self>
     pub fn new(user_config: ReticulumConfig) -> Result<Arc<Self>> {
         // 1. Resolve configdir
         let configdir = resolve_configdir(&user_config)?;
@@ -240,10 +242,41 @@ impl Reticulum {
             reticulum.panic_on_interface_error,
         )?;
 
-        // TODO (task 11): RPC server
-        // TODO (task 13): Background jobs
+        // RPC server (shared instance only)
+        if reticulum.is_shared_instance {
+            let rpc_key = reticulum.rpc_key.clone().unwrap_or_else(|| {
+                use sha2::{Sha256, Digest};
+                match reticulum.transport_identity.get_private_key() {
+                    Ok(priv_bytes) => Sha256::digest(&priv_bytes).to_vec(),
+                    Err(_) => vec![0u8; 32], // fallback — should not happen
+                }
+            });
+            let port = reticulum.local_control_port;
+            let shutdown = reticulum.shutdown.clone();
+            match crate::reticulum::rpc::RpcServer::start(port, rpc_key, shutdown) {
+                Ok(_server) => { /* server runs in background thread */ }
+                Err(e) => {
+                    eprintln!("Warning: failed to start RPC server: {}", e);
+                }
+            }
+        }
 
-        Ok(Arc::new(reticulum))
+        let ret = Arc::new(reticulum);
+
+        // Background jobs thread (shared or standalone instance)
+        if ret.is_shared_instance || ret.is_standalone_instance {
+            let shutdown = ret.shutdown.clone();
+            let cachepath = ret.paths.cachepath.clone();
+            let resourcepath = ret.paths.resourcepath.clone();
+            std::thread::Builder::new()
+                .name("jobs".into())
+                .spawn(move || {
+                    crate::reticulum::jobs::run_jobs(shutdown, cachepath, resourcepath);
+                })
+                .ok();
+        }
+
+        Ok(ret)
     }
 
     /// Whether implicit proofs should be used.
