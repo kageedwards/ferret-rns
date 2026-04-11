@@ -4,6 +4,7 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
+use crate::identity::Identity;
 use crate::reticulum::config;
 use crate::reticulum::logging::LogDestination;
 use crate::{FerretError, Result};
@@ -129,6 +130,9 @@ pub struct Reticulum {
     // RPC
     pub rpc_key: Option<Vec<u8>>,
 
+    // Transport identity
+    pub transport_identity: Identity,
+
     // Shutdown signal
     pub shutdown: Arc<AtomicBool>,
 }
@@ -186,6 +190,13 @@ impl Reticulum {
             None => parsed.logging.loglevel.min(7),
         };
 
+        // 5. Load or create transport identity
+        let identity_path = match ret_sec.network_identity {
+            Some(ref custom_path) => custom_path.clone(),
+            None => paths.storagepath.join("identity"),
+        };
+        let transport_identity = load_or_create_identity(&identity_path)?;
+
         let reticulum = Reticulum {
             paths,
             is_shared_instance: false,
@@ -199,15 +210,15 @@ impl Reticulum {
             allow_probes: ret_sec.respond_to_probes,
             panic_on_interface_error: ret_sec.panic_on_interface_error,
             discover_interfaces: ret_sec.discover_interfaces,
-            discovery_enabled: false, // Set during transport init (task 7)
+            discovery_enabled: false,
             publish_blackhole: ret_sec.publish_blackhole,
             local_interface_port: ret_sec.shared_instance_port,
             local_control_port: ret_sec.instance_control_port,
             rpc_key: ret_sec.rpc_key.clone(),
+            transport_identity,
             shutdown: Arc::new(AtomicBool::new(false)),
         };
 
-        // TODO (task 7): Load transport identity, start transport
         // TODO (task 9): Shared instance management
         // TODO (task 10): Interface synthesis
         // TODO (task 11): RPC server
@@ -224,6 +235,26 @@ impl Reticulum {
     /// Whether transport routing is enabled.
     pub fn transport_enabled(&self) -> bool {
         self.transport_enabled
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Transport identity load/create
+// ---------------------------------------------------------------------------
+
+/// Load an existing identity from `path`, or create a new one and persist it.
+///
+/// - If the file exists, reads 64 bytes and calls `Identity::from_private_key`.
+/// - If the file does not exist, generates a new `Identity`, writes the
+///   64-byte private key to `path`, and returns the identity.
+/// - Returns an error if the file is corrupt or unreadable.
+fn load_or_create_identity(path: &Path) -> Result<Identity> {
+    if path.exists() {
+        Identity::from_file(path)
+    } else {
+        let identity = Identity::new();
+        identity.to_file(path)?;
+        Ok(identity)
     }
 }
 
@@ -359,5 +390,78 @@ mod tests {
         assert!(cfg.loglevel.is_none());
         assert!(cfg.verbosity.is_none());
         assert!(!cfg.require_shared_instance);
+    }
+
+    #[test]
+    fn test_load_or_create_identity_creates_new() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("identity");
+        assert!(!path.exists());
+        let id = load_or_create_identity(&path).unwrap();
+        assert!(path.exists());
+        // File should be exactly 64 bytes
+        let data = std::fs::read(&path).unwrap();
+        assert_eq!(data.len(), 64);
+        // Identity should have a valid hash
+        assert!(id.hash().is_ok());
+    }
+
+    #[test]
+    fn test_load_or_create_identity_loads_existing() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("identity");
+        // Create first
+        let id1 = load_or_create_identity(&path).unwrap();
+        // Load again — should get same identity
+        let id2 = load_or_create_identity(&path).unwrap();
+        assert_eq!(id1.hash().unwrap(), id2.hash().unwrap());
+    }
+
+    #[test]
+    fn test_load_or_create_identity_corrupt_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("identity");
+        // Write garbage (wrong length)
+        std::fs::write(&path, b"too short").unwrap();
+        assert!(load_or_create_identity(&path).is_err());
+    }
+
+    #[test]
+    fn test_reticulum_new_creates_transport_identity() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path().join("rns");
+        let config = ReticulumConfig {
+            configdir: Some(base.clone()),
+            ..Default::default()
+        };
+        let ret = Reticulum::new(config).unwrap();
+        // Identity file should exist in storage
+        assert!(base.join("storage").join("identity").exists());
+        // Identity should have a valid hash
+        assert!(ret.transport_identity.hash().is_ok());
+    }
+
+    #[test]
+    fn test_reticulum_new_network_identity_override() {
+        let tmp = tempfile::tempdir().unwrap();
+        let base = tmp.path().join("rns");
+        let custom_id_path = tmp.path().join("custom_identity");
+        std::fs::create_dir_all(&base).unwrap();
+        let config_text = format!(
+            "[reticulum]\nnetwork_identity = {}\n\n[logging]\nloglevel = 4\n",
+            custom_id_path.display()
+        );
+        std::fs::write(base.join("config"), &config_text).unwrap();
+
+        let config = ReticulumConfig {
+            configdir: Some(base.clone()),
+            ..Default::default()
+        };
+        let ret = Reticulum::new(config).unwrap();
+        // Custom identity file should exist
+        assert!(custom_id_path.exists());
+        // Default storage/identity should NOT exist
+        assert!(!base.join("storage").join("identity").exists());
+        assert!(ret.transport_identity.hash().is_ok());
     }
 }
