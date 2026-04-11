@@ -6,6 +6,7 @@ use std::sync::{Arc, RwLock};
 
 use crate::destination::destination::Destination;
 use crate::identity::Identity;
+use crate::link::link::Link;
 use crate::packet::packet::Packet;
 use crate::packet::receipt::PacketReceipt;
 use crate::transport::hashlist::PacketHashlist;
@@ -71,6 +72,8 @@ pub struct PendingLink {
     pub link_id: [u8; 16],
     pub destination_hash: [u8; 16],
     pub timestamp: f64,
+    /// Optional reference to the actual Link for lifecycle checks.
+    pub link: Option<Link>,
 }
 
 /// A link that has been fully established.
@@ -78,6 +81,8 @@ pub struct ActiveLink {
     pub link_id: [u8; 16],
     pub destination_hash: [u8; 16],
     pub timestamp: f64,
+    /// Optional reference to the actual Link for lifecycle checks.
+    pub link: Option<Link>,
 }
 
 // ---------------------------------------------------------------------------
@@ -222,6 +227,7 @@ impl TransportState {
                     link_id: pending.link_id,
                     destination_hash: pending.destination_hash,
                     timestamp: pending.timestamp,
+                    link: pending.link,
                 });
                 Ok(())
             }
@@ -263,6 +269,72 @@ impl TransportState {
     pub fn contains_packet_hash(&self, hash: &[u8; 32]) -> Result<bool> {
         let inner = self.read()?;
         Ok(inner.packet_hashlist.contains(hash))
+    }
+
+    // -----------------------------------------------------------------------
+    // Link lifecycle checks (called from jobs thread)
+    // -----------------------------------------------------------------------
+
+    /// Run link lifecycle checks: expire timed-out requests on active links,
+    /// check stale on active links, and check establishment timeout on pending links.
+    ///
+    /// Lock errors are logged and skipped (non-fatal).
+    pub fn check_link_lifecycles(&self) {
+        // 1. Active links: check pending request timeouts and stale detection
+        let active_links: Vec<Link> = match self.read() {
+            Ok(inner) => inner
+                .active_links
+                .iter()
+                .filter_map(|al| al.link.clone())
+                .collect(),
+            Err(e) => {
+                eprintln!("Warning: failed to read transport for active link checks: {e}");
+                return;
+            }
+        };
+
+        for link in &active_links {
+            // Check pending request timeouts
+            match link.write() {
+                Ok(mut inner) => {
+                    let now = crate::link::link::now();
+                    for receipt in &mut inner.pending_requests {
+                        if receipt.status == crate::link::request::RequestReceiptStatus::Sent
+                            && (now - receipt.sent_at) > receipt.timeout
+                        {
+                            receipt.request_timed_out();
+                        }
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Warning: failed to lock link for request timeout check: {e}");
+                }
+            }
+
+            // Check stale
+            if let Err(e) = link.check_stale() {
+                eprintln!("Warning: failed to check link stale: {e}");
+            }
+        }
+
+        // 2. Pending links: check establishment timeout
+        let pending_links: Vec<Link> = match self.read() {
+            Ok(inner) => inner
+                .pending_links
+                .iter()
+                .filter_map(|pl| pl.link.clone())
+                .collect(),
+            Err(e) => {
+                eprintln!("Warning: failed to read transport for pending link checks: {e}");
+                return;
+            }
+        };
+
+        for link in &pending_links {
+            if let Err(e) = link.check_establishment_timeout() {
+                eprintln!("Warning: failed to check link establishment timeout: {e}");
+            }
+        }
     }
 }
 
@@ -315,6 +387,7 @@ mod tests {
             link_id: [0x01; 16],
             destination_hash: [0x02; 16],
             timestamp: 1000.0,
+            link: None,
         };
         ts.register_link(link).unwrap();
         ts.activate_link(&[0x01; 16]).unwrap();

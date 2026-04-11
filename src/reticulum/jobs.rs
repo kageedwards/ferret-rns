@@ -92,6 +92,9 @@ pub fn run_jobs(
             break;
         }
 
+        // Link lifecycle checks (request timeouts, stale, establishment timeout)
+        transport.check_link_lifecycles();
+
         // Cache cleanup
         if last_clean.elapsed() >= Duration::from_secs(CLEAN_INTERVAL) {
             clean_caches(&cachepath, &resourcepath);

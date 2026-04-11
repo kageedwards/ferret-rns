@@ -434,6 +434,7 @@ impl Link {
             link_id,
             destination_hash: dest_hash,
             timestamp: now(),
+            link: Some(link.clone()),
         })?;
 
         {
