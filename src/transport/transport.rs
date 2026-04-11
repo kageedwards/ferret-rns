@@ -115,6 +115,9 @@ pub(crate) struct TransportInner {
     // Announce rate tracking
     pub(crate) announce_rate_table: HashMap<[u8; 16], Vec<f64>>,
 
+    // Local client destination tracking (shared instance routing)
+    pub(crate) local_client_destinations: HashMap<[u8; 16], Arc<dyn InterfaceHandle>>,
+
     // Cache directory
     pub(crate) cache_dir: Option<PathBuf>,
 }
@@ -151,6 +154,7 @@ impl TransportState {
                 packet_hashlist: PacketHashlist::new(1_000_000),
                 announce_handlers: Vec::new(),
                 announce_rate_table: HashMap::new(),
+                local_client_destinations: HashMap::new(),
                 cache_dir: None,
             })),
         }

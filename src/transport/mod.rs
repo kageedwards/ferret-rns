@@ -27,6 +27,8 @@ pub trait InterfaceHandle: Send + Sync {
     fn mode(&self) -> InterfaceMode;
     /// Unique hash identifying this interface.
     fn interface_hash(&self) -> &[u8];
+    /// Whether this interface is a local client (shared instance) interface.
+    fn is_local_client(&self) -> bool { false }
     /// Human-readable interface name (for RPC stats).
     fn name(&self) -> &str { "" }
     /// Total bytes received on this interface.

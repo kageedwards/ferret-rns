@@ -45,6 +45,18 @@ impl TransportState {
             packet.raw[1] = packet.hops;
         }
 
+        // Step 1b: Local client routing — track source destinations from
+        // local client interfaces so we can route replies back to them.
+        let from_local_client = interface.is_local_client();
+        if from_local_client {
+            let mut inner = self.write()?;
+            inner.local_client_destinations.insert(
+                packet.destination_hash,
+                Arc::clone(interface),
+            );
+            drop(inner);
+        }
+
         // Step 2: Apply packet_filter
         if !self.packet_filter(&packet)? {
             return Ok(());
@@ -62,6 +74,19 @@ impl TransportState {
 
         if !in_link_table && !is_lrproof {
             self.add_packet_hash(&packet_hash)?;
+        }
+
+        // Step 3b: If packet arrived on a network interface and is destined
+        // for a local client, forward it to the appropriate LocalClientInterface.
+        if !from_local_client {
+            let inner = self.read()?;
+            if let Some(local_iface) = inner.local_client_destinations.get(&packet.destination_hash) {
+                let local_iface = Arc::clone(local_iface);
+                drop(inner);
+                local_iface.transmit(&packet.raw)?;
+                return Ok(());
+            }
+            drop(inner);
         }
 
         // Step 4: Transport forwarding
