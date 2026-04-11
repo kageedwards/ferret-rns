@@ -15,6 +15,7 @@ use std::time::Duration;
 use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
+use crate::transport::TransportState;
 
 // ---------------------------------------------------------------------------
 // Wire types
@@ -53,6 +54,7 @@ pub struct RpcServer {
     listener: Option<TcpListener>,
     rpc_key: Vec<u8>,
     shutdown: Arc<AtomicBool>,
+    transport: TransportState,
 }
 
 impl RpcServer {
@@ -65,6 +67,7 @@ impl RpcServer {
         port: u16,
         rpc_key: Vec<u8>,
         shutdown: Arc<AtomicBool>,
+        transport: TransportState,
     ) -> Result<Arc<Self>> {
         let listener = TcpListener::bind(format!("127.0.0.1:{}", port))?;
         // Non-blocking so the accept loop can check the shutdown flag.
@@ -74,6 +77,7 @@ impl RpcServer {
             listener: Some(listener),
             rpc_key,
             shutdown,
+            transport,
         });
 
         let srv = Arc::clone(&server);
@@ -236,6 +240,7 @@ impl RpcServer {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::transport::TransportState;
     use std::net::TcpStream;
 
     fn send_request(port: u16, req: &RpcRequest) -> RpcResponse {
@@ -257,7 +262,8 @@ mod tests {
     fn start_server() -> (Arc<RpcServer>, u16, Vec<u8>) {
         let shutdown = Arc::new(AtomicBool::new(false));
         let key = vec![1, 2, 3, 4];
-        let srv = RpcServer::start(0, key.clone(), shutdown).unwrap();
+        let transport = TransportState::new();
+        let srv = RpcServer::start(0, key.clone(), shutdown, transport).unwrap();
         let port = srv.listener.as_ref().unwrap().local_addr().unwrap().port();
         // Give the accept loop a moment to start.
         thread::sleep(Duration::from_millis(50));

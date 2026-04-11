@@ -294,7 +294,8 @@ impl Reticulum {
             });
             let port = reticulum.local_control_port;
             let shutdown = reticulum.shutdown.clone();
-            match crate::reticulum::rpc::RpcServer::start(port, rpc_key, shutdown) {
+            let transport_for_rpc = reticulum.transport_state.clone();
+            match crate::reticulum::rpc::RpcServer::start(port, rpc_key, shutdown, transport_for_rpc) {
                 Ok(_server) => { /* server runs in background thread */ }
                 Err(e) => {
                     eprintln!("Warning: failed to start RPC server: {}", e);
