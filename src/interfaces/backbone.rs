@@ -160,13 +160,20 @@ impl BackboneClientInterface {
         max_reconnect_tries: Option<u32>,
     ) -> Result<Arc<Self>> {
         let addr = format!("{}:{}", target_ip, target_port);
-        let stream = TcpStream::connect_timeout(
-            &addr.parse().map_err(|e| {
+        let sock_addr = std::net::ToSocketAddrs::to_socket_addrs(&addr.as_str())
+            .map_err(|e| {
                 crate::FerretError::InterfaceConnectionFailed(format!(
-                    "invalid address {}: {}",
-                    addr, e
+                    "cannot resolve {}: {}", addr, e
                 ))
-            })?,
+            })?
+            .next()
+            .ok_or_else(|| {
+                crate::FerretError::InterfaceConnectionFailed(format!(
+                    "no addresses found for {}", addr
+                ))
+            })?;
+        let stream = TcpStream::connect_timeout(
+            &sock_addr,
             Duration::from_secs(INITIAL_CONNECT_TIMEOUT),
         )?;
         stream.set_nodelay(true)?;
@@ -302,13 +309,15 @@ impl BackboneClientInterface {
             }
 
             let addr = format!("{}:{}", self.target_ip, self.target_port);
-            if let Ok(parsed) = addr.parse() {
-                if let Ok(stream) =
-                    TcpStream::connect_timeout(&parsed, Duration::from_secs(INITIAL_CONNECT_TIMEOUT))
-                {
-                    let _ = stream.set_nodelay(true);
-                    *self.socket.lock().unwrap_or_else(|e| e.into_inner()) = Some(stream);
-                    self.base.online.store(true, Ordering::Relaxed);
+            if let Ok(mut addrs) = std::net::ToSocketAddrs::to_socket_addrs(&addr.as_str()) {
+                if let Some(sock_addr) = addrs.next() {
+                    if let Ok(stream) =
+                        TcpStream::connect_timeout(&sock_addr, Duration::from_secs(INITIAL_CONNECT_TIMEOUT))
+                    {
+                        let _ = stream.set_nodelay(true);
+                        *self.socket.lock().unwrap_or_else(|e| e.into_inner()) = Some(stream);
+                        self.base.online.store(true, Ordering::Relaxed);
+                    }
                 }
             }
         }
