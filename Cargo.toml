@@ -44,3 +44,4 @@ proptest = "1"
 tempfile = "3"
 serde = { version = "1", features = ["derive"] }
 rmp-serde = "1"
+filetime = "0.2"
