@@ -271,3 +271,84 @@ proptest! {
         let _result = parse_config(&input);
     }
 }
+
+
+// ---------------------------------------------------------------------------
+// Feature: ferret-main-process, Property 1: Directory initialization creates
+// all required subdirectories
+// **Validates: Requirements 1.1, 1.3**
+//
+// For any valid base directory path, calling init_directories creates all
+// required subdirs, and calling it again succeeds without error (idempotency).
+// ---------------------------------------------------------------------------
+
+use ferret_rns::reticulum::init_directories;
+
+/// Strategy for random alphanumeric directory name suffixes (1-20 chars).
+fn dir_suffix_strategy() -> impl Strategy<Value = String> {
+    "[a-zA-Z0-9]{1,20}"
+}
+
+/// The 8 directories that init_directories must create (relative to configdir).
+const EXPECTED_SUBDIRS: &[&str] = &[
+    "",                          // configdir itself
+    "storage",
+    "storage/cache",
+    "storage/cache/announces",
+    "storage/resources",
+    "storage/identities",
+    "storage/blackhole",
+    "interfaces",
+];
+
+proptest! {
+    #[test]
+    fn dir_init_creates_all_subdirs_and_is_idempotent(suffix in dir_suffix_strategy()) {
+        let tmp = tempfile::tempdir().expect("failed to create temp dir");
+        let base = tmp.path().join(&suffix);
+
+        // First call — should create everything
+        let paths = init_directories(&base).expect("first init_directories call should succeed");
+
+        // Verify all 8 expected subdirectories exist
+        for subdir in EXPECTED_SUBDIRS {
+            let full = base.join(subdir);
+            prop_assert!(
+                full.is_dir(),
+                "expected directory to exist after first call: {}",
+                full.display()
+            );
+        }
+
+        // Verify returned paths point to the right places
+        prop_assert_eq!(&paths.configdir, &base);
+        prop_assert_eq!(&paths.storagepath, &base.join("storage"));
+        prop_assert_eq!(&paths.cachepath, &base.join("storage/cache"));
+        prop_assert_eq!(&paths.resourcepath, &base.join("storage/resources"));
+        prop_assert_eq!(&paths.identitypath, &base.join("storage/identities"));
+        prop_assert_eq!(&paths.blackholepath, &base.join("storage/blackhole"));
+        prop_assert_eq!(&paths.interfacepath, &base.join("interfaces"));
+
+        // Second call — idempotency: should succeed without error
+        let paths2 = init_directories(&base).expect("second init_directories call should succeed (idempotency)");
+
+        // All subdirectories still exist
+        for subdir in EXPECTED_SUBDIRS {
+            let full = base.join(subdir);
+            prop_assert!(
+                full.is_dir(),
+                "expected directory to still exist after second call: {}",
+                full.display()
+            );
+        }
+
+        // Returned paths are identical
+        prop_assert_eq!(&paths.configdir, &paths2.configdir);
+        prop_assert_eq!(&paths.storagepath, &paths2.storagepath);
+        prop_assert_eq!(&paths.cachepath, &paths2.cachepath);
+        prop_assert_eq!(&paths.resourcepath, &paths2.resourcepath);
+        prop_assert_eq!(&paths.identitypath, &paths2.identitypath);
+        prop_assert_eq!(&paths.blackholepath, &paths2.blackholepath);
+        prop_assert_eq!(&paths.interfacepath, &paths2.interfacepath);
+    }
+}
