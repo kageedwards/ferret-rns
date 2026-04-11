@@ -66,6 +66,14 @@ impl TransportState {
 
         let now = now_f64();
 
+        // Transport-level announce rate check: suppress if this destination
+        // was recently rebroadcast within the minimum interval.
+        if packet.packet_type == PacketType::Announce {
+            if !self.transport_announce_rate_allowed(&packet.destination_hash, now)? {
+                return Ok(false);
+            }
+        }
+
         for iface in &interfaces {
             // For ANNOUNCE packets with hops > 0: apply rate limiting
             if packet.packet_type == PacketType::Announce && packet.hops > 0 {
@@ -126,6 +134,23 @@ impl TransportState {
             }
         }
         Ok(false)
+    }
+
+    /// Check transport-level announce rate limiting using the rate table.
+    ///
+    /// Returns `true` if the announce is allowed (no recent rebroadcast for this
+    /// destination within the minimum rebroadcast interval).
+    fn transport_announce_rate_allowed(&self, dest_hash: &[u8; 16], now: f64) -> Result<bool> {
+        let inner = self.read()?;
+        if let Some(timestamps) = inner.announce_rate_table.get(dest_hash) {
+            if let Some(&last) = timestamps.last() {
+                let min_interval = 1.0; // minimum seconds between rebroadcasts
+                if now - last < min_interval {
+                    return Ok(false);
+                }
+            }
+        }
+        Ok(true)
     }
 
     /// Check announce rate limiting for an interface.
