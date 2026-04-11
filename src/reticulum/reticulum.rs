@@ -6,10 +6,11 @@ use std::sync::Arc;
 
 use std::collections::HashMap;
 
-use crate::identity::Identity;
+use crate::identity::{Identity, IdentityStore, RatchetStore};
 use crate::interfaces::local::{LocalClientInterface, LocalServerInterface};
 use crate::reticulum::config::{self, ConfigValue, InterfaceDefinition};
 use crate::reticulum::logging::LogDestination;
+use crate::transport::TransportState;
 use crate::{FerretError, Result};
 
 // ---------------------------------------------------------------------------
@@ -136,6 +137,15 @@ pub struct Reticulum {
     // Transport identity
     pub transport_identity: Identity,
 
+    // Global transport routing state
+    pub transport_state: TransportState,
+
+    // Known destinations store
+    pub identity_store: Arc<IdentityStore>,
+
+    // Ratchet store
+    pub ratchet_store: Arc<RatchetStore>,
+
     // Shared instance interface (when this instance is the server)
     pub shared_instance_interface: Option<Arc<LocalServerInterface>>,
 
@@ -209,7 +219,7 @@ impl Reticulum {
         let transport_identity = load_or_create_identity(&identity_path)?;
 
         let mut reticulum = Reticulum {
-            paths,
+            paths: paths.clone(),
             is_shared_instance: false,
             is_connected_to_shared_instance: false,
             is_standalone_instance: false,
@@ -227,6 +237,9 @@ impl Reticulum {
             local_control_port: ret_sec.instance_control_port,
             rpc_key: ret_sec.rpc_key.clone(),
             transport_identity,
+            transport_state: TransportState::new(),
+            identity_store: Arc::new(IdentityStore::new()),
+            ratchet_store: Arc::new(RatchetStore::new(paths.storagepath.join("ratchets"))),
             shared_instance_interface: None,
             shutdown: Arc::new(AtomicBool::new(false)),
             exit_ran: AtomicBool::new(false),
