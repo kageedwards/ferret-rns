@@ -10,6 +10,7 @@ use crate::identity::{Identity, IdentityStore, RatchetStore};
 use crate::interfaces::local::{LocalClientInterface, LocalServerInterface};
 use crate::reticulum::config::{self, ConfigValue, InterfaceDefinition};
 use crate::reticulum::logging::LogDestination;
+use crate::transport::InterfaceHandle;
 use crate::transport::TransportState;
 use crate::{FerretError, Result};
 
@@ -278,6 +279,7 @@ impl Reticulum {
             &parsed.interfaces,
             &reticulum.paths,
             reticulum.panic_on_interface_error,
+            &reticulum.transport_state,
         )?;
 
         // RPC server (shared instance only)
@@ -490,6 +492,7 @@ pub fn synthesize_interfaces(
     interfaces: &[InterfaceDefinition],
     _paths: &ReticulumPaths,
     panic_on_error: bool,
+    transport: &TransportState,
 ) -> Result<()> {
     use crate::interfaces::{auto, i2p, pipe, tcp_client, tcp_server, udp};
 
@@ -513,10 +516,13 @@ pub fn synthesize_interfaces(
                 let ignored = get_str(params, "ignored_interfaces")
                     .map(|s| s.split(',').map(|x| x.trim().to_string()).collect())
                     .unwrap_or_default();
-                let _iface = auto::AutoInterface::new(
+                let iface = auto::AutoInterface::new(
                     name, group_id, discovery_scope, discovery_port,
                     data_port, mcast_type, allowed, ignored,
                 )?;
+                let handle: Arc<dyn InterfaceHandle> = iface.base.clone();
+                iface.base.set_transport(transport.clone(), handle.clone());
+                transport.write()?.interfaces.push(handle);
                 Ok(())
             }
             "TCPServerInterface" => {
@@ -525,9 +531,12 @@ pub fn synthesize_interfaces(
                 let prefer_ipv6 = get_bool(params, "prefer_ipv6").unwrap_or(false);
                 let kiss_framing = get_bool(params, "kiss_framing").unwrap_or(false);
                 let i2p_tunneled = get_bool(params, "i2p_tunneled").unwrap_or(false);
-                let _iface = tcp_server::TCPServerInterface::bind(
+                let iface = tcp_server::TCPServerInterface::bind(
                     listen_ip, listen_port, name, prefer_ipv6, kiss_framing, i2p_tunneled,
                 )?;
+                let handle: Arc<dyn InterfaceHandle> = iface.base.clone();
+                iface.base.set_transport(transport.clone(), handle.clone());
+                transport.write()?.interfaces.push(handle);
                 Ok(())
             }
             "TCPClientInterface" => {
@@ -538,10 +547,13 @@ pub fn synthesize_interfaces(
                 let i2p_tunneled = get_bool(params, "i2p_tunneled").unwrap_or(false);
                 let max_reconnect = get_int(params, "max_reconnect_tries")
                     .map(|v| v as u32);
-                let _iface = tcp_client::TCPClientInterface::connect(
+                let iface = tcp_client::TCPClientInterface::connect(
                     target_host, target_port, name, kiss_framing, i2p_tunneled,
                     max_reconnect,
                 )?;
+                let handle: Arc<dyn InterfaceHandle> = iface.base.clone();
+                iface.base.set_transport(transport.clone(), handle.clone());
+                transport.write()?.interfaces.push(handle);
                 Ok(())
             }
             "UDPInterface" => {
@@ -551,9 +563,12 @@ pub fn synthesize_interfaces(
                     .unwrap_or_else(|| "255.255.255.255".into());
                 let forward_port = get_int(params, "forward_port").unwrap_or(0) as u16;
                 let broadcast = get_bool(params, "broadcast").unwrap_or(false);
-                let _iface = udp::UDPInterface::new(
+                let iface = udp::UDPInterface::new(
                     listen_ip, listen_port, forward_ip, forward_port, name, broadcast,
                 )?;
+                let handle: Arc<dyn InterfaceHandle> = iface.base.clone();
+                iface.base.set_transport(transport.clone(), handle.clone());
+                transport.write()?.interfaces.push(handle);
                 Ok(())
             }
             "PipeInterface" => {
@@ -572,7 +587,10 @@ pub fn synthesize_interfaces(
                 };
                 let respawn_delay = get_int(params, "respawn_delay")
                     .unwrap_or(pipe::DEFAULT_RESPAWN_DELAY as i64) as u64;
-                let _iface = pipe::PipeInterface::new(command, name, respawn_delay)?;
+                let iface = pipe::PipeInterface::new(command, name, respawn_delay)?;
+                let handle: Arc<dyn InterfaceHandle> = iface.base.clone();
+                iface.base.set_transport(transport.clone(), handle.clone());
+                transport.write()?.interfaces.push(handle);
                 Ok(())
             }
             "I2PInterface" => {
@@ -582,15 +600,21 @@ pub fn synthesize_interfaces(
                 if peers.is_some() {
                     // Client mode — connect to a peer destination
                     let dest = peers.unwrap();
-                    let _iface = i2p::I2PInterface::new_client(
+                    let iface = i2p::I2PInterface::new_client(
                         sam_address.as_deref(), dest, name, kiss_framing,
                     )?;
+                    let handle: Arc<dyn InterfaceHandle> = iface.base.clone();
+                    iface.base.set_transport(transport.clone(), handle.clone());
+                    transport.write()?.interfaces.push(handle);
                 } else {
                     // Server mode
                     let dest_key_path = get_str(params, "key_file");
-                    let _iface = i2p::I2PInterface::new_server(
+                    let iface = i2p::I2PInterface::new_server(
                         sam_address.as_deref(), dest_key_path, name, kiss_framing,
                     )?;
+                    let handle: Arc<dyn InterfaceHandle> = iface.base.clone();
+                    iface.base.set_transport(transport.clone(), handle.clone());
+                    transport.write()?.interfaces.push(handle);
                 }
                 Ok(())
             }

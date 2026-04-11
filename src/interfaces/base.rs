@@ -4,7 +4,7 @@
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 
 use crate::crypto::sha256;
 use crate::interfaces::ifac_processor::{ifac_check, ifac_mask, ifac_unmask, IfacState};
@@ -117,9 +117,9 @@ pub struct Interface {
 
     // Transport wiring
     /// Reference to the global transport state for inbound delivery.
-    pub transport: Option<TransportState>,
+    pub transport: RwLock<Option<TransportState>>,
     /// Self-reference as InterfaceHandle for passing to TransportState::inbound().
-    pub self_handle: Option<Arc<dyn InterfaceHandle>>,
+    pub self_handle: RwLock<Option<Arc<dyn InterfaceHandle>>>,
 
     // Transmit callback — set by concrete interface
     transmit_fn: Option<Box<dyn Fn(&[u8]) -> Result<()> + Send + Sync>>,
@@ -163,8 +163,8 @@ impl Interface {
             oa_freq_deque: Mutex::new(VecDeque::with_capacity(OA_FREQ_SAMPLES)),
             ingress_control: Mutex::new(IngressControl::new(t)),
             parent_interface: None,
-            transport: None,
-            self_handle: None,
+            transport: RwLock::new(None),
+            self_handle: RwLock::new(None),
             transmit_fn,
             interface_hash: None,
             announce_allowed_at: Mutex::new(0.0),
@@ -178,9 +178,13 @@ impl Interface {
 
     /// Wire this interface to a TransportState and store a self-handle for
     /// passing to `TransportState::inbound()` during packet processing.
-    pub fn set_transport(&mut self, ts: TransportState, handle: Arc<dyn InterfaceHandle>) {
-        self.transport = Some(ts);
-        self.self_handle = Some(handle);
+    pub fn set_transport(&self, ts: TransportState, handle: Arc<dyn InterfaceHandle>) {
+        if let Ok(mut guard) = self.transport.write() {
+            *guard = Some(ts);
+        }
+        if let Ok(mut guard) = self.self_handle.write() {
+            *guard = Some(handle);
+        }
     }
 
     /// Auto-configure HW_MTU based on bitrate tiers (matching Python reference).
@@ -442,9 +446,13 @@ impl Interface {
         self.rxb.fetch_add(packet.len() as u64, Ordering::Relaxed);
 
         // Step 6: Deliver to transport for inbound processing.
-        if let (Some(ref transport), Some(ref handle)) = (&self.transport, &self.self_handle) {
-            if let Err(e) = transport.inbound(&packet, handle) {
-                eprintln!("[{}] transport inbound error: {}", self.name, e);
+        let transport_ref = self.transport.read().ok();
+        let handle_ref = self.self_handle.read().ok();
+        if let (Some(t_guard), Some(h_guard)) = (transport_ref.as_ref(), handle_ref.as_ref()) {
+            if let (Some(ref transport), Some(ref handle)) = (t_guard.as_ref(), h_guard.as_ref()) {
+                if let Err(e) = transport.inbound(&packet, handle) {
+                    eprintln!("[{}] transport inbound error: {}", self.name, e);
+                }
             }
         }
     }
