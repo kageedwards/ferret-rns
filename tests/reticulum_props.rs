@@ -352,3 +352,124 @@ proptest! {
         prop_assert_eq!(&paths.interfacepath, &paths2.interfacepath);
     }
 }
+
+
+// ---------------------------------------------------------------------------
+// Feature: ferret-main-process, Property 5: Cache cleanup removes only expired files
+// **Validates: Requirements 8.4, 8.5**
+//
+// For any set of cache files with varying ages, cleanup removes exactly those
+// exceeding the threshold and preserves the rest.
+// ---------------------------------------------------------------------------
+
+use ferret_rns::reticulum::jobs::clean_cache_dir;
+use std::time::{Duration, SystemTime};
+
+proptest! {
+    #[test]
+    fn cache_cleanup_removes_only_expired_files(
+        file_count in 1usize..=20,
+        threshold in 1000u64..=100_000,
+        seed in any::<u64>(),
+    ) {
+        // Use the seed to deterministically generate ages for each file
+        let ages: Vec<u64> = (0..file_count)
+            .map(|i| {
+                // Simple deterministic spread: mix seed with index
+                ((seed.wrapping_mul(6364136223846793005).wrapping_add(i as u64)) % 200_001)
+            })
+            .collect();
+
+        let tmp = tempfile::tempdir().expect("failed to create temp dir");
+        let dir = tmp.path();
+
+        let mut expected_removed = 0usize;
+        let mut expected_kept = 0usize;
+
+        for (i, &age_secs) in ages.iter().enumerate() {
+            let path = dir.join(format!("file_{}.dat", i));
+            std::fs::write(&path, b"data").expect("failed to write test file");
+
+            // Set mtime to `age_secs` seconds ago
+            let mtime = if age_secs == 0 {
+                filetime::FileTime::now()
+            } else {
+                filetime::FileTime::from_system_time(
+                    SystemTime::now() - Duration::from_secs(age_secs),
+                )
+            };
+            filetime::set_file_mtime(&path, mtime).expect("failed to set mtime");
+
+            if age_secs > threshold {
+                expected_removed += 1;
+            } else {
+                expected_kept += 1;
+            }
+        }
+
+        let removed = clean_cache_dir(dir, threshold);
+        prop_assert_eq!(
+            removed, expected_removed,
+            "expected {} files removed (threshold={}s), got {}",
+            expected_removed, threshold, removed,
+        );
+
+        // Count remaining files
+        let remaining: usize = std::fs::read_dir(dir)
+            .expect("read_dir failed")
+            .filter_map(|e| e.ok())
+            .filter(|e| e.path().is_file())
+            .count();
+        prop_assert_eq!(
+            remaining, expected_kept,
+            "expected {} files kept, got {}",
+            expected_kept, remaining,
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Feature: ferret-main-process, Property 6: Exit handler idempotency
+// **Validates: Requirements 11.5**
+//
+// For any number of calls N >= 1, the handler's side effects execute exactly
+// once: shutdown flag is set, and the handler doesn't panic on repeated calls.
+// ---------------------------------------------------------------------------
+
+use ferret_rns::reticulum::{Reticulum, ReticulumConfig};
+
+proptest! {
+    #[test]
+    fn exit_handler_idempotency(n in 1usize..=10) {
+        let tmp = tempfile::tempdir().expect("failed to create temp dir");
+        let base = tmp.path().join("rns_exit_test");
+
+        // Use standalone mode (share_instance=false) to avoid port conflicts
+        std::fs::create_dir_all(&base).expect("mkdir failed");
+        let config_text = "[reticulum]\nshare_instance = no\n\n[logging]\nloglevel = 4\n";
+        std::fs::write(base.join("config"), config_text).expect("write config failed");
+
+        let config = ReticulumConfig {
+            configdir: Some(base),
+            ..Default::default()
+        };
+        let ret = Reticulum::new(config).expect("Reticulum::new failed");
+
+        // Shutdown should initially be false
+        prop_assert!(
+            !ret.shutdown.load(std::sync::atomic::Ordering::SeqCst),
+            "shutdown should be false before exit_handler",
+        );
+
+        // Call exit_handler N times — should never panic
+        for _ in 0..n {
+            ret.exit_handler();
+        }
+
+        // Shutdown flag should be set after exit_handler
+        prop_assert!(
+            ret.shutdown.load(std::sync::atomic::Ordering::SeqCst),
+            "shutdown should be true after exit_handler",
+        );
+    }
+}

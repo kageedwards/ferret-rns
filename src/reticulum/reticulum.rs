@@ -1,7 +1,7 @@
 // Reticulum — top-level orchestrator for the Reticulum Network Stack.
 
 use std::path::{Path, PathBuf};
-use std::sync::atomic::AtomicBool;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use std::collections::HashMap;
@@ -141,6 +141,9 @@ pub struct Reticulum {
 
     // Shutdown signal
     pub shutdown: Arc<AtomicBool>,
+
+    // Guard to ensure exit_handler runs at most once
+    exit_ran: AtomicBool,
 }
 
 impl Reticulum {
@@ -224,6 +227,7 @@ impl Reticulum {
             transport_identity,
             shared_instance_interface: None,
             shutdown: Arc::new(AtomicBool::new(false)),
+            exit_ran: AtomicBool::new(false),
         };
 
         // Shared instance management
@@ -250,6 +254,34 @@ impl Reticulum {
     /// Whether transport routing is enabled.
     pub fn transport_enabled(&self) -> bool {
         self.transport_enabled
+    }
+
+    /// Graceful shutdown handler. Idempotent — runs at most once even if
+    /// called multiple times.
+    ///
+    /// Steps:
+    /// 1. Set shutdown flag to signal background threads
+    /// 2. Detach shared_instance_interface if present
+    /// 3. TODO: detach all registered interfaces (full wiring in task 17)
+    /// 4. TODO: persist transport state (full wiring in task 17)
+    /// 5. TODO: persist identity state (full wiring in task 17)
+    pub fn exit_handler(&self) {
+        // Ensure we only run once
+        if self.exit_ran.swap(true, Ordering::SeqCst) {
+            return;
+        }
+
+        // Signal shutdown to background threads (jobs, RPC, etc.)
+        self.shutdown.store(true, Ordering::SeqCst);
+
+        // Detach shared instance interface if present
+        if let Some(ref server) = self.shared_instance_interface {
+            server.detach();
+        }
+
+        // TODO (task 17): detach all registered interfaces
+        // TODO (task 17): persist transport state
+        // TODO (task 17): persist identity state
     }
 }
 
