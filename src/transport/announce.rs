@@ -116,6 +116,7 @@ impl TransportState {
                 packet_hash,
             };
             inner.path_table.insert(packet.destination_hash, entry);
+            inner.announce_rate_table.entry(packet.destination_hash).or_insert_with(Vec::new).push(now);
             drop(inner);
         }
 
