@@ -789,9 +789,111 @@ pub fn synthesize_interfaces(
                 Ok(())
             }
             #[cfg(feature = "serial")]
-            "SerialInterface" | "KISSInterface" | "RNodeInterface" | "WeaveInterface" => {
-                eprintln!("Warning: {} type '{}' — serial interfaces not yet wired in synthesizer",
-                    name, iface_def.interface_type);
+            "SerialInterface" => {
+                use crate::interfaces::serial;
+                let port_path = match get_str(params, "port") {
+                    Some(p) => p,
+                    None => {
+                        let msg = format!("{}: SerialInterface requires 'port' param", name);
+                        if panic_on_error { return Err(FerretError::InterfaceError(msg)); }
+                        eprintln!("Warning: {}, skipping", msg);
+                        continue;
+                    }
+                };
+                let baud = get_int(params, "speed").unwrap_or(9600) as u32;
+                let data_bits = match get_int(params, "databits").unwrap_or(8) {
+                    7 => serialport::DataBits::Seven,
+                    _ => serialport::DataBits::Eight,
+                };
+                let parity = match get_str(params, "parity").as_deref() {
+                    Some("even") => serialport::Parity::Even,
+                    Some("odd") => serialport::Parity::Odd,
+                    _ => serialport::Parity::None,
+                };
+                let stop_bits = match get_int(params, "stopbits").unwrap_or(1) {
+                    2 => serialport::StopBits::Two,
+                    _ => serialport::StopBits::One,
+                };
+                let iface = serial::SerialInterface::new(
+                    port_path, baud, data_bits, parity, stop_bits, name,
+                )?;
+                let handle: Arc<dyn InterfaceHandle> = iface.base.clone();
+                iface.base.set_transport(transport.clone(), handle.clone());
+                transport.write()?.interfaces.push(handle);
+                Ok(())
+            }
+            #[cfg(feature = "serial")]
+            "KISSInterface" => {
+                use crate::interfaces::kiss;
+                let port_path = match get_str(params, "port") {
+                    Some(p) => p,
+                    None => {
+                        let msg = format!("{}: KISSInterface requires 'port' param", name);
+                        if panic_on_error { return Err(FerretError::InterfaceError(msg)); }
+                        eprintln!("Warning: {}, skipping", msg);
+                        continue;
+                    }
+                };
+                let baud = get_int(params, "speed").unwrap_or(9600) as u32;
+                let preamble = get_int(params, "preamble").unwrap_or(350) as u8;
+                let txtail = get_int(params, "txtail").unwrap_or(20) as u8;
+                let persistence = get_int(params, "persistence").unwrap_or(64) as u8;
+                let slottime = get_int(params, "slottime").unwrap_or(20) as u8;
+                let flow_control = get_bool(params, "flow_control").unwrap_or(false);
+                let beacon_interval = get_int(params, "beacon_interval").map(|v| v as u64);
+                let beacon_data = get_str(params, "beacon_data").map(|s| s.into_bytes());
+                let iface = kiss::KISSInterface::new(
+                    port_path, baud, preamble, txtail, persistence, slottime,
+                    flow_control, beacon_interval, beacon_data, name,
+                )?;
+                let handle: Arc<dyn InterfaceHandle> = iface.base.clone();
+                iface.base.set_transport(transport.clone(), handle.clone());
+                transport.write()?.interfaces.push(handle);
+                Ok(())
+            }
+            #[cfg(feature = "serial")]
+            "RNodeInterface" => {
+                use crate::interfaces::rnode;
+                let port_path = match get_str(params, "port") {
+                    Some(p) => p,
+                    None => {
+                        let msg = format!("{}: RNodeInterface requires 'port' param", name);
+                        if panic_on_error { return Err(FerretError::InterfaceError(msg)); }
+                        eprintln!("Warning: {}, skipping", msg);
+                        continue;
+                    }
+                };
+                let frequency = get_int(params, "frequency").unwrap_or(868_000_000) as u32;
+                let bandwidth = get_int(params, "bandwidth").unwrap_or(125_000) as u32;
+                let spreading_factor = get_int(params, "spreading_factor").unwrap_or(7) as u8;
+                let coding_rate = get_int(params, "coding_rate").unwrap_or(5) as u8;
+                let tx_power = get_int(params, "txpower").unwrap_or(7) as u8;
+                let iface = rnode::RNodeInterface::new(
+                    port_path, frequency, bandwidth, spreading_factor,
+                    coding_rate, tx_power, name,
+                )?;
+                let handle: Arc<dyn InterfaceHandle> = iface.base.clone();
+                iface.base.set_transport(transport.clone(), handle.clone());
+                transport.write()?.interfaces.push(handle);
+                Ok(())
+            }
+            #[cfg(feature = "serial")]
+            "WeaveInterface" => {
+                use crate::interfaces::weave;
+                let port_path = match get_str(params, "port") {
+                    Some(p) => p,
+                    None => {
+                        let msg = format!("{}: WeaveInterface requires 'port' param", name);
+                        if panic_on_error { return Err(FerretError::InterfaceError(msg)); }
+                        eprintln!("Warning: {}, skipping", msg);
+                        continue;
+                    }
+                };
+                let baud = get_int(params, "speed").unwrap_or(9600) as u32;
+                let iface = weave::WeaveInterface::new(port_path, baud, name)?;
+                let handle: Arc<dyn InterfaceHandle> = iface.base.clone();
+                iface.base.set_transport(transport.clone(), handle.clone());
+                transport.write()?.interfaces.push(handle);
                 Ok(())
             }
             #[cfg(not(feature = "serial"))]
@@ -802,7 +904,28 @@ pub fn synthesize_interfaces(
             }
             #[cfg(feature = "backbone")]
             "BackboneInterface" => {
-                eprintln!("Warning: {} type 'BackboneInterface' — not yet wired in synthesizer", name);
+                use crate::interfaces::backbone;
+                let listen_ip = get_str(params, "listen_ip").unwrap_or_else(|| "0.0.0.0".into());
+                let listen_port = get_int(params, "listen_port").unwrap_or(5001) as u16;
+                let prefer_ipv6 = get_bool(params, "prefer_ipv6").unwrap_or(false);
+                // Check if this is a client (has target_host) or server config
+                if let Some(target_host) = get_str(params, "target_host") {
+                    let target_port = get_int(params, "target_port").unwrap_or(5001) as u16;
+                    let max_reconnect = get_int(params, "max_reconnect_tries").map(|v| v as u32);
+                    let iface = backbone::BackboneClientInterface::connect(
+                        target_host, target_port, name, max_reconnect,
+                    )?;
+                    let handle: Arc<dyn InterfaceHandle> = iface.base.clone();
+                    iface.base.set_transport(transport.clone(), handle.clone());
+                    transport.write()?.interfaces.push(handle);
+                } else {
+                    let iface = backbone::BackboneInterface::bind(
+                        listen_ip, listen_port, name, prefer_ipv6,
+                    )?;
+                    let handle: Arc<dyn InterfaceHandle> = iface.base.clone();
+                    iface.base.set_transport(transport.clone(), handle.clone());
+                    transport.write()?.interfaces.push(handle);
+                }
                 Ok(())
             }
             #[cfg(not(feature = "backbone"))]
