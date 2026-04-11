@@ -6,6 +6,8 @@ use std::sync::Arc;
 
 use std::collections::HashMap;
 
+use crate::discovery::announcer::InterfaceAnnouncer;
+use crate::discovery::autoconnect::AutoconnectManager;
 use crate::identity::{Identity, IdentityStore, RatchetStore};
 use crate::interfaces::local::{LocalClientInterface, LocalServerInterface};
 use crate::reticulum::config::{self, ConfigValue, InterfaceDefinition};
@@ -147,6 +149,10 @@ pub struct Reticulum {
     // Ratchet store
     pub ratchet_store: Arc<RatchetStore>,
 
+    // Discovery subsystem
+    pub interface_announcer: Option<InterfaceAnnouncer>,
+    pub autoconnect_manager: Option<AutoconnectManager>,
+
     // Shared instance interface (when this instance is the server)
     pub shared_instance_interface: Option<Arc<LocalServerInterface>>,
 
@@ -266,6 +272,8 @@ impl Reticulum {
             transport_state,
             identity_store,
             ratchet_store,
+            interface_announcer: None,
+            autoconnect_manager: None,
             shared_instance_interface: None,
             shutdown: Arc::new(AtomicBool::new(false)),
             exit_ran: AtomicBool::new(false),
@@ -285,6 +293,40 @@ impl Reticulum {
 
         // Load persisted path table (after interface synthesis so we can match interfaces)
         load_path_table(&reticulum.transport_state, &reticulum.paths.storagepath);
+
+        // Discovery subsystem startup
+        if reticulum.discover_interfaces {
+            let max_autoconnected = if ret_sec.autoconnect_discovered_interfaces > 0 {
+                Some(ret_sec.autoconnect_discovered_interfaces as usize)
+            } else {
+                None
+            };
+
+            match InterfaceAnnouncer::new(
+                &reticulum.transport_identity,
+                &reticulum.transport_state,
+            ) {
+                Ok(mut announcer) => {
+                    announcer.start();
+                    reticulum.interface_announcer = Some(announcer);
+                }
+                Err(e) => {
+                    eprintln!("Warning: failed to create InterfaceAnnouncer: {}", e);
+                }
+            }
+
+            let mut autoconnect = AutoconnectManager::new(
+                max_autoconnected,
+                reticulum.transport_state.clone(),
+            );
+            autoconnect.start_monitoring();
+            reticulum.autoconnect_manager = Some(autoconnect);
+
+            // Mark discovery as enabled when both subsystems are created
+            if reticulum.interface_announcer.is_some() {
+                reticulum.discovery_enabled = true;
+            }
+        }
 
         // RPC server (shared instance only)
         if reticulum.is_shared_instance {
