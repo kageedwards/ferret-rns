@@ -4,9 +4,11 @@ use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 
+use std::collections::HashMap;
+
 use crate::identity::Identity;
 use crate::interfaces::local::{LocalClientInterface, LocalServerInterface};
-use crate::reticulum::config;
+use crate::reticulum::config::{self, ConfigValue, InterfaceDefinition};
 use crate::reticulum::logging::LogDestination;
 use crate::{FerretError, Result};
 
@@ -227,7 +229,13 @@ impl Reticulum {
         // Shared instance management
         setup_shared_instance(&mut reticulum, &user_config)?;
 
-        // TODO (task 10): Interface synthesis
+        // Interface synthesis from config
+        synthesize_interfaces(
+            &parsed.interfaces,
+            &reticulum.paths,
+            reticulum.panic_on_interface_error,
+        )?;
+
         // TODO (task 11): RPC server
         // TODO (task 13): Background jobs
 
@@ -333,6 +341,194 @@ fn setup_shared_instance(ret: &mut Reticulum, user_config: &ReticulumConfig) -> 
         return Err(FerretError::InterfaceConnectionFailed(
             "no shared instance available".to_string(),
         ));
+    }
+
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Interface synthesis helpers
+// ---------------------------------------------------------------------------
+
+/// Extract a string value from an interface params map.
+fn get_str(params: &HashMap<String, ConfigValue>, key: &str) -> Option<String> {
+    match params.get(key)? {
+        ConfigValue::String(s) => Some(s.clone()),
+        _ => None,
+    }
+}
+
+/// Extract a bool value from an interface params map.
+fn get_bool(params: &HashMap<String, ConfigValue>, key: &str) -> Option<bool> {
+    match params.get(key)? {
+        ConfigValue::Bool(b) => Some(*b),
+        _ => None,
+    }
+}
+
+/// Extract an integer value from an interface params map.
+fn get_int(params: &HashMap<String, ConfigValue>, key: &str) -> Option<i64> {
+    match params.get(key)? {
+        ConfigValue::Integer(i) => Some(*i),
+        _ => None,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Interface synthesizer
+// ---------------------------------------------------------------------------
+
+/// Instantiate concrete interfaces from parsed config definitions.
+///
+/// Iterates over each `InterfaceDefinition`, skips disabled ones, maps the
+/// `interface_type` to the appropriate constructor, and logs/skips on failure
+/// (or returns immediately if `panic_on_error` is true).
+pub fn synthesize_interfaces(
+    interfaces: &[InterfaceDefinition],
+    _paths: &ReticulumPaths,
+    panic_on_error: bool,
+) -> Result<()> {
+    use crate::interfaces::{auto, i2p, pipe, tcp_client, tcp_server, udp};
+
+    for iface_def in interfaces {
+        if !iface_def.enabled {
+            continue;
+        }
+
+        let name = iface_def.name.clone();
+        let params = &iface_def.params;
+        let result: Result<()> = match iface_def.interface_type.as_str() {
+            "AutoInterface" => {
+                let group_id = get_str(params, "group_id");
+                let discovery_scope = get_str(params, "discovery_scope");
+                let discovery_port = get_int(params, "discovery_port").map(|v| v as u16);
+                let data_port = get_int(params, "data_port").map(|v| v as u16);
+                let mcast_type = get_str(params, "multicast_address_type");
+                let allowed = get_str(params, "allowed_interfaces")
+                    .map(|s| s.split(',').map(|x| x.trim().to_string()).collect())
+                    .unwrap_or_default();
+                let ignored = get_str(params, "ignored_interfaces")
+                    .map(|s| s.split(',').map(|x| x.trim().to_string()).collect())
+                    .unwrap_or_default();
+                let _iface = auto::AutoInterface::new(
+                    name, group_id, discovery_scope, discovery_port,
+                    data_port, mcast_type, allowed, ignored,
+                )?;
+                Ok(())
+            }
+            "TCPServerInterface" => {
+                let listen_ip = get_str(params, "listen_ip").unwrap_or_else(|| "0.0.0.0".into());
+                let listen_port = get_int(params, "listen_port").unwrap_or(4242) as u16;
+                let prefer_ipv6 = get_bool(params, "prefer_ipv6").unwrap_or(false);
+                let kiss_framing = get_bool(params, "kiss_framing").unwrap_or(false);
+                let i2p_tunneled = get_bool(params, "i2p_tunneled").unwrap_or(false);
+                let _iface = tcp_server::TCPServerInterface::bind(
+                    listen_ip, listen_port, name, prefer_ipv6, kiss_framing, i2p_tunneled,
+                )?;
+                Ok(())
+            }
+            "TCPClientInterface" => {
+                let target_host = get_str(params, "target_host")
+                    .unwrap_or_else(|| "127.0.0.1".into());
+                let target_port = get_int(params, "target_port").unwrap_or(4242) as u16;
+                let kiss_framing = get_bool(params, "kiss_framing").unwrap_or(false);
+                let i2p_tunneled = get_bool(params, "i2p_tunneled").unwrap_or(false);
+                let max_reconnect = get_int(params, "max_reconnect_tries")
+                    .map(|v| v as u32);
+                let _iface = tcp_client::TCPClientInterface::connect(
+                    target_host, target_port, name, kiss_framing, i2p_tunneled,
+                    max_reconnect,
+                )?;
+                Ok(())
+            }
+            "UDPInterface" => {
+                let listen_ip = get_str(params, "listen_ip").unwrap_or_else(|| "0.0.0.0".into());
+                let listen_port = get_int(params, "listen_port").unwrap_or(0) as u16;
+                let forward_ip = get_str(params, "forward_ip")
+                    .unwrap_or_else(|| "255.255.255.255".into());
+                let forward_port = get_int(params, "forward_port").unwrap_or(0) as u16;
+                let broadcast = get_bool(params, "broadcast").unwrap_or(false);
+                let _iface = udp::UDPInterface::new(
+                    listen_ip, listen_port, forward_ip, forward_port, name, broadcast,
+                )?;
+                Ok(())
+            }
+            "PipeInterface" => {
+                let command = match get_str(params, "command") {
+                    Some(c) => c,
+                    None => {
+                        return if panic_on_error {
+                            Err(FerretError::InterfaceError(
+                                format!("{}: PipeInterface requires 'command' param", name),
+                            ))
+                        } else {
+                            eprintln!("Warning: {}: PipeInterface requires 'command' param, skipping", name);
+                            continue;
+                        };
+                    }
+                };
+                let respawn_delay = get_int(params, "respawn_delay")
+                    .unwrap_or(pipe::DEFAULT_RESPAWN_DELAY as i64) as u64;
+                let _iface = pipe::PipeInterface::new(command, name, respawn_delay)?;
+                Ok(())
+            }
+            "I2PInterface" => {
+                let sam_address = get_str(params, "sam_address");
+                let kiss_framing = get_bool(params, "kiss_framing").unwrap_or(false);
+                let peers = get_str(params, "peers");
+                if peers.is_some() {
+                    // Client mode — connect to a peer destination
+                    let dest = peers.unwrap();
+                    let _iface = i2p::I2PInterface::new_client(
+                        sam_address.as_deref(), dest, name, kiss_framing,
+                    )?;
+                } else {
+                    // Server mode
+                    let dest_key_path = get_str(params, "key_file");
+                    let _iface = i2p::I2PInterface::new_server(
+                        sam_address.as_deref(), dest_key_path, name, kiss_framing,
+                    )?;
+                }
+                Ok(())
+            }
+            #[cfg(feature = "serial")]
+            "SerialInterface" | "KISSInterface" | "RNodeInterface" | "WeaveInterface" => {
+                eprintln!("Warning: {} type '{}' — serial interfaces not yet wired in synthesizer",
+                    name, iface_def.interface_type);
+                Ok(())
+            }
+            #[cfg(not(feature = "serial"))]
+            "SerialInterface" | "KISSInterface" | "RNodeInterface" | "WeaveInterface" => {
+                eprintln!("Warning: {} type '{}' — serial feature not compiled in, skipping",
+                    name, iface_def.interface_type);
+                Ok(())
+            }
+            #[cfg(feature = "backbone")]
+            "BackboneInterface" => {
+                eprintln!("Warning: {} type 'BackboneInterface' — not yet wired in synthesizer", name);
+                Ok(())
+            }
+            #[cfg(not(feature = "backbone"))]
+            "BackboneInterface" => {
+                eprintln!("Warning: {} type 'BackboneInterface' — backbone feature not compiled in, skipping", name);
+                Ok(())
+            }
+            unknown => {
+                let msg = format!("{}: unknown interface type '{}'", name, unknown);
+                if panic_on_error {
+                    return Err(FerretError::InterfaceError(msg));
+                }
+                eprintln!("Warning: {}, skipping", msg);
+                Ok(())
+            }
+        };
+
+        if let Err(e) = result {
+            if panic_on_error {
+                return Err(e);
+            }
+            eprintln!("Warning: failed to start interface '{}': {}", iface_def.name, e);
+        }
     }
 
     Ok(())
