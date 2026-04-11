@@ -442,10 +442,11 @@ impl Interface {
         self.rxb.fetch_add(packet.len() as u64, Ordering::Relaxed);
 
         // Step 6: Deliver to transport for inbound processing.
-        // TODO: Wire up transport delivery — concrete interfaces will call
-        // TransportState::inbound(packet, interface_arc) once they have an
-        // Arc<dyn InterfaceHandle> reference to pass along.
-        let _ = &packet;
+        if let (Some(ref transport), Some(ref handle)) = (&self.transport, &self.self_handle) {
+            if let Err(e) = transport.inbound(&packet, handle) {
+                eprintln!("[{}] transport inbound error: {}", self.name, e);
+            }
+        }
     }
 
     /// Process an outbound packet: IFAC mask if configured → transmit → update txb.
