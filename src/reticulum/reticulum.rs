@@ -310,10 +310,20 @@ impl Reticulum {
             let shutdown = ret.shutdown.clone();
             let cachepath = ret.paths.cachepath.clone();
             let resourcepath = ret.paths.resourcepath.clone();
+            let transport_for_jobs = ret.transport_state.clone();
+            let identity_store_for_jobs = ret.identity_store.clone();
+            let storagepath_for_jobs = ret.paths.storagepath.clone();
             std::thread::Builder::new()
                 .name("jobs".into())
                 .spawn(move || {
-                    crate::reticulum::jobs::run_jobs(shutdown, cachepath, resourcepath);
+                    crate::reticulum::jobs::run_jobs(
+                        shutdown,
+                        cachepath,
+                        resourcepath,
+                        transport_for_jobs,
+                        identity_store_for_jobs,
+                        storagepath_for_jobs,
+                    );
                 })
                 .ok();
         }

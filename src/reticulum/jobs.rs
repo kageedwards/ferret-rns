@@ -1,9 +1,14 @@
 // Background persistence and cache cleanup jobs.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime};
+
+use serde::{Deserialize, Serialize};
+
+use crate::identity::IdentityStore;
+use crate::transport::TransportState;
 
 /// Resource cache lifetime: 24 hours.
 pub const RESOURCE_CACHE: u64 = 86_400;
@@ -20,15 +25,62 @@ pub const PERSIST_INTERVAL: u64 = 43_200;
 /// Minimum time between gracious persists: 5 minutes.
 pub const GRACIOUS_PERSIST_INTERVAL: u64 = 300;
 
+/// Serializable subset of a path table entry (no interface reference).
+#[derive(Serialize, Deserialize)]
+struct SerializedPathEntry {
+    pub timestamp: f64,
+    pub received_from: [u8; 16],
+    pub hops: u8,
+    pub expires: f64,
+    pub random_blobs: Vec<[u8; 10]>,
+    pub packet_hash: [u8; 32],
+}
+
+/// Persist the path table from TransportState to `storagepath/path_table`.
+///
+/// Errors are logged and ignored (non-fatal).
+pub fn persist_path_table(transport: &TransportState, storagepath: &Path) {
+    let result = (|| -> crate::Result<()> {
+        let inner = transport.read()?;
+        let serializable: std::collections::HashMap<[u8; 16], SerializedPathEntry> = inner
+            .path_table
+            .iter()
+            .map(|(k, v)| {
+                (
+                    *k,
+                    SerializedPathEntry {
+                        timestamp: v.timestamp,
+                        received_from: v.received_from,
+                        hops: v.hops,
+                        expires: v.expires,
+                        random_blobs: v.random_blobs.clone(),
+                        packet_hash: v.packet_hash,
+                    },
+                )
+            })
+            .collect();
+        let data = crate::util::msgpack::serialize(&serializable)?;
+        std::fs::write(storagepath.join("path_table"), data)?;
+        Ok(())
+    })();
+
+    if let Err(e) = result {
+        eprintln!("Warning: failed to persist path table: {}", e);
+    }
+}
+
 /// Run the background jobs loop.
 ///
 /// Sleeps `JOB_INTERVAL` between iterations. Each iteration checks the
 /// `shutdown` flag and, when enough time has elapsed, cleans caches or
-/// updates the persist timestamp.
+/// persists state.
 pub fn run_jobs(
     shutdown: Arc<AtomicBool>,
     cachepath: std::path::PathBuf,
     resourcepath: std::path::PathBuf,
+    transport: TransportState,
+    identity_store: Arc<IdentityStore>,
+    storagepath: PathBuf,
 ) {
     let mut last_clean = Instant::now();
     let mut last_persist = Instant::now();
@@ -46,8 +98,14 @@ pub fn run_jobs(
             last_clean = Instant::now();
         }
 
-        // Persist (placeholder — full wiring in task 17)
+        // Persist transport state and identity store
         if last_persist.elapsed() >= Duration::from_secs(PERSIST_INTERVAL) {
+            persist_path_table(&transport, &storagepath);
+
+            if let Err(e) = identity_store.save(&storagepath.join("known_destinations")) {
+                eprintln!("Warning: failed to persist known destinations: {}", e);
+            }
+
             last_persist = Instant::now();
         }
     }
