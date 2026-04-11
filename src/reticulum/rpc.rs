@@ -93,6 +93,15 @@ impl RpcServer {
         self.shutdown.store(true, Ordering::SeqCst);
     }
 
+    /// Return the local port the server is listening on.
+    pub fn local_port(&self) -> u16 {
+        self.listener
+            .as_ref()
+            .and_then(|l| l.local_addr().ok())
+            .map(|a| a.port())
+            .unwrap_or(0)
+    }
+
     // -----------------------------------------------------------------------
     // Internal
     // -----------------------------------------------------------------------

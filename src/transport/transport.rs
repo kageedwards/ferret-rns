@@ -89,37 +89,37 @@ pub struct ActiveLink {
 // TransportInner — all mutable state behind the RwLock
 // ---------------------------------------------------------------------------
 
-pub(crate) struct TransportInner {
-    pub(crate) identity: Option<Identity>,
-    pub(crate) transport_enabled: bool,
+pub struct TransportInner {
+    pub identity: Option<Identity>,
+    pub transport_enabled: bool,
 
     // Registries
-    pub(crate) interfaces: Vec<Arc<dyn InterfaceHandle>>,
-    pub(crate) destinations: Vec<Arc<RwLock<Destination>>>,
-    pub(crate) pending_links: Vec<PendingLink>,
-    pub(crate) active_links: Vec<ActiveLink>,
-    pub(crate) receipts: Vec<PacketReceipt>,
+    pub interfaces: Vec<Arc<dyn InterfaceHandle>>,
+    pub destinations: Vec<Arc<RwLock<Destination>>>,
+    pub pending_links: Vec<PendingLink>,
+    pub active_links: Vec<ActiveLink>,
+    pub receipts: Vec<PacketReceipt>,
 
     // Tables
-    pub(crate) path_table: HashMap<[u8; 16], PathEntry>,
-    pub(crate) announce_table: HashMap<[u8; 16], AnnounceEntry>,
-    pub(crate) reverse_table: HashMap<[u8; 16], ReverseEntry>,
-    pub(crate) link_table: HashMap<[u8; 16], LinkEntry>,
+    pub path_table: HashMap<[u8; 16], PathEntry>,
+    pub announce_table: HashMap<[u8; 16], AnnounceEntry>,
+    pub reverse_table: HashMap<[u8; 16], ReverseEntry>,
+    pub link_table: HashMap<[u8; 16], LinkEntry>,
 
     // Dedup
-    pub(crate) packet_hashlist: PacketHashlist,
+    pub packet_hashlist: PacketHashlist,
 
     // Announce handlers
-    pub(crate) announce_handlers: Vec<AnnounceHandler>,
+    pub announce_handlers: Vec<AnnounceHandler>,
 
     // Announce rate tracking
-    pub(crate) announce_rate_table: HashMap<[u8; 16], Vec<f64>>,
+    pub announce_rate_table: HashMap<[u8; 16], Vec<f64>>,
 
     // Local client destination tracking (shared instance routing)
-    pub(crate) local_client_destinations: HashMap<[u8; 16], Arc<dyn InterfaceHandle>>,
+    pub local_client_destinations: HashMap<[u8; 16], Arc<dyn InterfaceHandle>>,
 
     // Cache directory
-    pub(crate) cache_dir: Option<PathBuf>,
+    pub cache_dir: Option<PathBuf>,
 }
 
 // ---------------------------------------------------------------------------
@@ -132,7 +132,7 @@ pub(crate) struct TransportInner {
 /// and passed to multiple threads cheaply.
 #[derive(Clone)]
 pub struct TransportState {
-    pub(crate) inner: Arc<RwLock<TransportInner>>,
+    pub inner: Arc<RwLock<TransportInner>>,
 }
 
 impl TransportState {
