@@ -267,7 +267,8 @@ fn announce_collision_with_different_pub_key_is_rejected() {
 
     // First announce succeeds
     let (dest_hash, announce1) = build_signed_announce(&id1, &name_hash, &random_hash, None, None);
-    let valid = validate_announce(&announce1, &store, &ratchet_store, false).unwrap();
+    let fake_packet_hash = Identity::full_hash(&announce1.destination_hash);
+    let valid = validate_announce(&announce1, &store, &ratchet_store, false, &fake_packet_hash).unwrap();
     assert!(valid, "First announce should succeed");
 
     // Second announce with a different identity but same dest_hash should be rejected
@@ -279,7 +280,7 @@ fn announce_collision_with_different_pub_key_is_rejected() {
         .unwrap();
 
     // Now re-validate the first announce — collision detected
-    let result = validate_announce(&announce1, &store, &ratchet_store, false).unwrap();
+    let result = validate_announce(&announce1, &store, &ratchet_store, false, &fake_packet_hash).unwrap();
     assert!(!result, "Announce with colliding dest_hash but different pub key should be rejected");
 }
 
@@ -321,11 +322,12 @@ fn signature_only_validation_skips_dest_hash_check() {
     };
 
     // Signature-only should pass (signature is valid, dest_hash check skipped)
-    let result = validate_announce(&announce, &store, &ratchet_store, true).unwrap();
+    let fake_packet_hash = Identity::full_hash(&announce.destination_hash);
+    let result = validate_announce(&announce, &store, &ratchet_store, true, &fake_packet_hash).unwrap();
     assert!(result, "Signature-only validation should pass even with wrong dest_hash");
 
     // Full validation should fail (dest_hash doesn't match expected)
-    let result = validate_announce(&announce, &store, &ratchet_store, false).unwrap();
+    let result = validate_announce(&announce, &store, &ratchet_store, false, &fake_packet_hash).unwrap();
     assert!(!result, "Full validation should fail with wrong dest_hash");
 }
 
@@ -348,6 +350,7 @@ fn announce_with_invalid_signature_is_rejected() {
     // Corrupt the signature
     announce.signature = vec![0u8; 64];
 
-    let result = validate_announce(&announce, &store, &ratchet_store, false).unwrap();
+    let fake_packet_hash = Identity::full_hash(&announce.destination_hash);
+    let result = validate_announce(&announce, &store, &ratchet_store, false, &fake_packet_hash).unwrap();
     assert!(!result, "Announce with invalid signature should be rejected");
 }

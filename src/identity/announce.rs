@@ -119,6 +119,7 @@ pub fn validate_announce(
     store: &IdentityStore,
     ratchet_store: &RatchetStore,
     only_validate_signature: bool,
+    packet_hash: &[u8],
 ) -> Result<bool> {
     // 1. Construct signed_data
     let mut signed_data = Vec::new();
@@ -171,9 +172,8 @@ pub fn validate_announce(
     }
 
     // 6. Store identity
-    let packet_hash = Identity::full_hash(&announce.destination_hash);
     store.remember(
-        &packet_hash,
+        packet_hash,
         &announce.destination_hash,
         &announce.public_key,
         announce.app_data.as_deref(),

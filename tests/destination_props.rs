@@ -195,7 +195,8 @@ proptest! {
         let store = ferret_rns::identity::IdentityStore::new();
         let ratchet_store = ferret_rns::identity::RatchetStore::new(dir.path().to_path_buf());
 
-        let valid = validate_announce(&announce, &store, &ratchet_store, true).unwrap();
+        let fake_packet_hash = Identity::full_hash(&dest.hash);
+        let valid = validate_announce(&announce, &store, &ratchet_store, true, &fake_packet_hash).unwrap();
         prop_assert!(valid, "announce signature must be valid");
     }
 }

@@ -38,12 +38,13 @@ impl TransportState {
         )?;
 
         // Step 1: Validate signature only first
-        if !validate_announce(&announce, identity_store, ratchet_store, true)? {
+        let packet_hash = packet.get_hash();
+        if !validate_announce(&announce, identity_store, ratchet_store, true, &packet_hash)? {
             return Ok(());
         }
 
         // Step 2: Full validation (hash check, store identity, store ratchet)
-        if !validate_announce(&announce, identity_store, ratchet_store, false)? {
+        if !validate_announce(&announce, identity_store, ratchet_store, false, &packet_hash)? {
             return Ok(());
         }
 
@@ -73,8 +74,6 @@ impl TransportState {
             InterfaceMode::Roaming => now + ROAMING_PATH_TIME as f64,
             _ => now + PATHFINDER_E as f64,
         };
-
-        let packet_hash = packet.get_hash();
 
         // Step 3: Determine whether to update path table
         let should_update = {

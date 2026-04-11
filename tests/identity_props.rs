@@ -213,7 +213,8 @@ proptest! {
         let store = IdentityStore::new();
         let ratchet_store = RatchetStore::new(dir.path().to_path_buf());
 
-        let valid = validate_announce(&announce, &store, &ratchet_store, false).unwrap();
+        let fake_packet_hash = Identity::full_hash(dest_hash);
+        let valid = validate_announce(&announce, &store, &ratchet_store, false, &fake_packet_hash).unwrap();
         prop_assert!(valid);
 
         // Verify identity is recallable
