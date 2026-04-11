@@ -1,9 +1,12 @@
 // InterfaceAnnouncer: periodic interface discovery announce sender
 
 use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
 
+use crate::destination::destination::Destination;
 use crate::identity::Identity;
 use crate::transport::TransportState;
+use crate::types::destination::{DestinationDirection, DestinationType};
 use crate::{FerretError, Result};
 
 use super::handler::FLAG_ENCRYPTED;
@@ -57,25 +60,40 @@ pub struct InterfaceAnnouncer {
     should_run: bool,
     job_interval: u64,
     stamp_cache: HashMap<[u8; 32], Vec<u8>>,
-    // Placeholder: real Destination created in new()
-    // discovery_destination would be a Destination, but we store minimal state
-    _identity_hash: [u8; 16],
+    /// Real discovery Destination (Single/In) for interface announces.
+    discovery_destination: Arc<RwLock<Destination>>,
+    /// Reference to the global transport state for outbound announce submission.
+    transport: TransportState,
 }
 
 impl InterfaceAnnouncer {
     /// Create a new InterfaceAnnouncer.
     ///
-    /// In a full implementation, this creates a Destination with app_name
-    /// "rnstransport" and aspects ["discovery", "interface"]. For now we
-    /// store the identity hash and defer actual Destination creation to
-    /// Layer 7 when the full Reticulum process is available.
-    pub fn new(identity: &Identity, _transport: &TransportState) -> Result<Self> {
-        let id_hash = *identity.hash()?;
+    /// Creates a real Destination with app_name "rnstransport" and aspects
+    /// ["discovery", "interface"] for sending interface discovery announces.
+    pub fn new(identity: &Identity, transport: &TransportState) -> Result<Self> {
+        // Reconstruct an owned Identity from the private key bytes
+        let prv_bytes = identity.get_private_key()?;
+        let owned_identity = Identity::from_private_key(&prv_bytes)?;
+
+        let dest = Destination::new(
+            Some(owned_identity),
+            DestinationDirection::In,
+            DestinationType::Single,
+            super::APP_NAME,
+            &["discovery", "interface"],
+        )?;
+        let dest_arc = Arc::new(RwLock::new(dest));
+
+        // Register the destination with TransportState so outbound routing knows about it
+        transport.register_destination(dest_arc.clone())?;
+
         Ok(Self {
             should_run: false,
             job_interval: JOB_INTERVAL,
             stamp_cache: HashMap::new(),
-            _identity_hash: id_hash,
+            discovery_destination: dest_arc,
+            transport: transport.clone(),
         })
     }
 
@@ -92,6 +110,40 @@ impl InterfaceAnnouncer {
     /// Check if the announcer is running.
     pub fn is_running(&self) -> bool {
         self.should_run
+    }
+
+    /// Announce a single discoverable interface.
+    ///
+    /// Builds the app_data from the interface info, calls `Destination::announce()`
+    /// to produce an announce packet, then submits it to `TransportState::outbound()`
+    /// for transmission on all outbound interfaces.
+    pub fn announce_interface(
+        &mut self,
+        info: &InterfaceDiscoveryInfo,
+        network_identity: Option<&Identity>,
+    ) -> Result<()> {
+        let app_data = self.get_interface_announce_data(info, network_identity)?;
+
+        let mut dest = self
+            .discovery_destination
+            .write()
+            .map_err(|_| FerretError::Token("lock poisoned".into()))?;
+
+        let packet = dest.announce(
+            app_data.as_deref(),
+            false,  // not a path response
+            None,   // no tag
+            false,  // don't auto-send; we submit via TransportState::outbound()
+            None,   // no ratchet store needed for discovery announces
+        )?;
+
+        drop(dest);
+
+        if let Some(mut pkt) = packet {
+            self.transport.outbound(&mut pkt)?;
+        }
+
+        Ok(())
     }
 
     /// Build the announce app_data for an interface.
