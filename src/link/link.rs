@@ -104,6 +104,9 @@ pub(crate) struct LinkInner {
     pub(crate) attached_interface: Option<usize>,
     pub(crate) remote_identity: Option<Identity>,
 
+    // Transport reference (for channel outlet wiring)
+    pub(crate) transport: Option<TransportState>,
+
     // Channel (lazily created)
     pub(crate) channel: Option<crate::channel::Channel>,
 
@@ -268,6 +271,7 @@ impl Link {
             owner: None,
             attached_interface: None,
             remote_identity: None,
+            transport: Some(transport.clone()),
             channel: None,
             pending_requests: Vec::new(),
             incoming_resources: Vec::new(),
@@ -377,6 +381,7 @@ impl Link {
             owner: Some(owner),
             attached_interface: None,
             remote_identity: None,
+            transport: None,
             channel: None,
             pending_requests: Vec::new(),
             incoming_resources: Vec::new(),
@@ -449,7 +454,9 @@ impl Link {
     pub fn get_channel(&self) -> Result<()> {
         let mut inner = self.write()?;
         if inner.channel.is_none() {
-            let outlet = crate::channel::outlet::LinkChannelOutlet::new(self.clone());
+            let transport = inner.transport.clone()
+                .ok_or_else(|| crate::FerretError::Token("no transport state on link".into()))?;
+            let outlet = crate::channel::outlet::LinkChannelOutlet::new(self.clone(), transport);
             inner.channel = Some(crate::channel::Channel::new(Box::new(outlet)));
         }
         Ok(())
@@ -462,7 +469,9 @@ impl Link {
     {
         let mut inner = self.write()?;
         if inner.channel.is_none() {
-            let outlet = crate::channel::outlet::LinkChannelOutlet::new(self.clone());
+            let transport = inner.transport.clone()
+                .ok_or_else(|| crate::FerretError::Token("no transport state on link".into()))?;
+            let outlet = crate::channel::outlet::LinkChannelOutlet::new(self.clone(), transport);
             inner.channel = Some(crate::channel::Channel::new(Box::new(outlet)));
         }
         let channel = inner.channel.as_mut().expect("just ensured");
@@ -720,6 +729,7 @@ impl Link {
             owner: None,
             attached_interface: None,
             remote_identity: None,
+            transport: None,
             channel: None,
             pending_requests: Vec::new(),
             incoming_resources: Vec::new(),

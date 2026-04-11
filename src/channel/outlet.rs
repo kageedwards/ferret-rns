@@ -2,6 +2,7 @@
 
 use crate::channel::message::MessageState;
 use crate::packet::packet::Packet;
+use crate::packet::receipt::{PacketReceipt, ReceiptStatus};
 use crate::packet::Encryptable;
 use crate::transport::transport::TransportState;
 use crate::types::packet::{ContextFlag, HeaderType, PacketContext, PacketType};
@@ -49,12 +50,13 @@ use crate::link::LinkStatus;
 /// ChannelOutlet implementation backed by a Link.
 pub struct LinkChannelOutlet {
     link: Link,
+    transport: TransportState,
 }
 
 impl LinkChannelOutlet {
-    /// Create a new LinkChannelOutlet wrapping the given Link.
-    pub fn new(link: Link) -> Self {
-        Self { link }
+    /// Create a new LinkChannelOutlet wrapping the given Link and TransportState.
+    pub fn new(link: Link, transport: TransportState) -> Self {
+        Self { link, transport }
     }
 }
 
@@ -77,6 +79,17 @@ impl ChannelOutlet for LinkChannelOutlet {
         );
         packet.pack(&self.link as &dyn Encryptable)?;
         transport.outbound(&mut packet)?;
+
+        // Create a PacketReceipt and register it with TransportState
+        let hash = packet.get_hash();
+        let truncated_hash = packet.get_truncated_hash();
+        let rtt = self.link.rtt().unwrap_or(None).unwrap_or(0.5);
+        let timeout = rtt * 2.5; // default receipt timeout based on RTT
+        let receipt = PacketReceipt::new(hash, truncated_hash, timeout, None);
+        {
+            let mut inner = self.transport.write()?;
+            inner.receipts.push(receipt);
+        }
 
         // Update link traffic counters
         {
@@ -116,28 +129,76 @@ impl ChannelOutlet for LinkChannelOutlet {
         let _ = self.link.teardown(transport);
     }
 
-    fn get_packet_state(&self, _packet: &Packet) -> MessageState {
-        // Without direct access to PacketReceipt from the packet,
-        // we return Sent as default. Real receipt tracking would
-        // require storing receipts in TransportState.
-        MessageState::Sent
+    fn get_packet_state(&self, packet: &Packet) -> MessageState {
+        let hash = match packet.packet_hash {
+            Some(h) => h,
+            None => return MessageState::New,
+        };
+        let inner = match self.transport.read() {
+            Ok(inner) => inner,
+            Err(_) => return MessageState::Sent,
+        };
+        match inner.receipts.iter().find(|r| r.hash == hash) {
+            Some(receipt) => match receipt.status {
+                ReceiptStatus::Sent => MessageState::Sent,
+                ReceiptStatus::Delivered => MessageState::Delivered,
+                ReceiptStatus::Failed | ReceiptStatus::Culled => MessageState::Failed,
+            },
+            None => MessageState::New,
+        }
     }
 
     fn set_packet_timeout_callback(
         &self,
-        _packet: &mut Packet,
-        _callback: Option<Box<dyn Fn(&Packet) + Send + Sync>>,
-        _timeout: Option<f64>,
+        packet: &mut Packet,
+        callback: Option<Box<dyn Fn(&Packet) + Send + Sync>>,
+        timeout: Option<f64>,
     ) {
-        // PacketReceipt callback integration deferred to full transport wiring
+        let hash = match packet.packet_hash {
+            Some(h) => h,
+            None => return,
+        };
+        if let Ok(mut inner) = self.transport.write() {
+            if let Some(receipt) = inner.receipts.iter_mut().find(|r| r.hash == hash) {
+                if let Some(t) = timeout {
+                    receipt.set_timeout(t);
+                }
+                if let Some(cb) = callback {
+                    // Wrap the Packet callback into a PacketReceipt callback
+                    // We capture the packet hash to identify the packet later
+                    let packet_hash = hash;
+                    receipt.set_timeout_callback(Box::new(move |_receipt| {
+                        // Create a minimal packet with the hash for the callback
+                        let mut p = Packet::from_raw(Vec::new());
+                        p.packet_hash = Some(packet_hash);
+                        cb(&p);
+                    }));
+                }
+            }
+        }
     }
 
     fn set_packet_delivered_callback(
         &self,
-        _packet: &mut Packet,
-        _callback: Option<Box<dyn Fn(&Packet) + Send + Sync>>,
+        packet: &mut Packet,
+        callback: Option<Box<dyn Fn(&Packet) + Send + Sync>>,
     ) {
-        // PacketReceipt callback integration deferred to full transport wiring
+        let hash = match packet.packet_hash {
+            Some(h) => h,
+            None => return,
+        };
+        if let Ok(mut inner) = self.transport.write() {
+            if let Some(receipt) = inner.receipts.iter_mut().find(|r| r.hash == hash) {
+                if let Some(cb) = callback {
+                    let packet_hash = hash;
+                    receipt.set_delivery_callback(Box::new(move |_receipt| {
+                        let mut p = Packet::from_raw(Vec::new());
+                        p.packet_hash = Some(packet_hash);
+                        cb(&p);
+                    }));
+                }
+            }
+        }
     }
 
     fn get_packet_id(&self, packet: &Packet) -> Option<[u8; 32]> {
