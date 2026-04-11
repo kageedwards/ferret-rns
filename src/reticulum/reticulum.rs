@@ -272,7 +272,8 @@ impl Reticulum {
         };
 
         // Shared instance management
-        setup_shared_instance(&mut reticulum, &user_config)?;
+        let transport_ref = reticulum.transport_state.clone();
+        setup_shared_instance(&mut reticulum, &user_config, &transport_ref)?;
 
         // Interface synthesis from config
         synthesize_interfaces(
@@ -388,7 +389,7 @@ fn load_or_create_identity(path: &Path) -> Result<Identity> {
 ///   fall back to connecting as a client; on client failure run standalone.
 /// - `share_instance = false`: run standalone.
 /// - `require_shared_instance = true` with no shared instance: return error.
-fn setup_shared_instance(ret: &mut Reticulum, user_config: &ReticulumConfig) -> Result<()> {
+fn setup_shared_instance(ret: &mut Reticulum, user_config: &ReticulumConfig, transport: &TransportState) -> Result<()> {
     if ret.share_instance {
         let name = "Shared Instance".to_string();
         let addr = "127.0.0.1".to_string();
@@ -398,6 +399,12 @@ fn setup_shared_instance(ret: &mut Reticulum, user_config: &ReticulumConfig) -> 
             Ok(server) => {
                 // We are the shared instance (server).
                 ret.is_shared_instance = true;
+
+                // Register the LocalServerInterface with TransportState.
+                let handle: Arc<dyn InterfaceHandle> = server.base.clone();
+                server.base.set_transport(transport.clone(), handle.clone());
+                transport.write()?.interfaces.push(handle);
+
                 ret.shared_instance_interface = Some(server);
             }
             Err(e) => {
