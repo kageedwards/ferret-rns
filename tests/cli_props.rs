@@ -262,3 +262,75 @@ mod property_2 {
         }
     }
 }
+
+// =========================================================================
+// Feature: ferret-cli-utilities, Property 3: File Encrypt/Decrypt Round-Trip
+// =========================================================================
+
+/// For any random content 0–64KB and any Identity with private key,
+/// encrypt then decrypt recovers original content.
+///
+/// Validates: Requirements 6.8, 6.9
+mod property_3 {
+    use super::*;
+    use ferret_rns::identity::Identity;
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(100))]
+
+        #[test]
+        fn encrypt_decrypt_roundtrip(data in proptest::collection::vec(any::<u8>(), 0..=65536)) {
+            let identity = Identity::new();
+
+            let ciphertext = identity.encrypt(&data, None)
+                .expect("encrypt should succeed");
+
+            // Ciphertext must be different from plaintext (unless empty)
+            if !data.is_empty() {
+                prop_assert_ne!(&ciphertext, &data, "ciphertext must differ from plaintext");
+            }
+
+            let decrypted = identity.decrypt(&ciphertext, None, false)
+                .expect("decrypt should succeed")
+                .expect("decrypt should return Some");
+
+            prop_assert_eq!(decrypted, data, "round-trip must recover original content");
+        }
+    }
+}
+
+// =========================================================================
+// Feature: ferret-cli-utilities, Property 4: File Sign/Validate Round-Trip
+// =========================================================================
+
+/// For any random content and any Identity, sign then validate succeeds;
+/// validate with different identity fails.
+///
+/// Validates: Requirements 6.10, 6.11
+mod property_4 {
+    use super::*;
+    use ferret_rns::identity::Identity;
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(100))]
+
+        #[test]
+        fn sign_validate_roundtrip(data in proptest::collection::vec(any::<u8>(), 0..=65536)) {
+            let identity = Identity::new();
+            let other = Identity::new();
+
+            let signature = identity.sign(&data)
+                .expect("sign should succeed");
+
+            // Validate with correct identity
+            let valid = identity.validate(&signature, &data)
+                .expect("validate should succeed");
+            prop_assert!(valid, "signature must be valid with correct identity");
+
+            // Validate with different identity must fail
+            let invalid = other.validate(&signature, &data)
+                .unwrap_or(false);
+            prop_assert!(!invalid, "signature must be invalid with different identity");
+        }
+    }
+}
