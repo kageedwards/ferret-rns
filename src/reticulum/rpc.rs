@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
 use crate::transport::TransportState;
-use crate::{log_debug, log_warning};
+use crate::{log_debug, log_verbose, log_warning};
 
 // ---------------------------------------------------------------------------
 // Wire types
@@ -115,7 +115,8 @@ impl RpcServer {
 
         while !self.shutdown.load(Ordering::SeqCst) {
             match listener.accept() {
-                Ok((stream, _addr)) => {
+                Ok((stream, addr)) => {
+                    log_verbose!("RPC client connected from {}", addr);
                     if let Err(e) = self.handle_connection(stream) {
                         log_debug!("RPC connection error: {e}");
                     }

@@ -62,17 +62,26 @@ impl LocalServerInterface {
                 None => return,
             }
         };
+        crate::log_verbose!("Shared instance listening on {}:{}", self.bind_addr, self.bind_port);
         for stream in listener.incoming() {
             if self.shutdown.load(Ordering::Relaxed) { break; }
             let stream = match stream {
                 Ok(s) => s,
                 Err(_) => { if self.shutdown.load(Ordering::Relaxed) { break; } continue; }
             };
+            let peer = stream.peer_addr().map(|a| a.to_string()).unwrap_or_else(|_| "unknown".into());
+            crate::log_verbose!("Local client connected from {}", peer);
             let name = format!("Client on {}", self.base.name);
-            if let Ok(client) = LocalClientInterface::from_socket(stream, name) {
-                let mut spawned = self.spawned.lock().unwrap_or_else(|e| e.into_inner());
-                spawned.retain(|c| !c.base.detached.load(Ordering::Relaxed));
-                spawned.push(client);
+            match LocalClientInterface::from_socket(stream, name) {
+                Ok(client) => {
+                    crate::log_debug!("Spawned local client interface for {}", peer);
+                    let mut spawned = self.spawned.lock().unwrap_or_else(|e| e.into_inner());
+                    spawned.retain(|c| !c.base.detached.load(Ordering::Relaxed));
+                    spawned.push(client);
+                }
+                Err(e) => {
+                    crate::log_warning!("Failed to create local client for {}: {}", peer, e);
+                }
             }
         }
     }
@@ -102,10 +111,12 @@ impl LocalClientInterface {
     /// Connect to the shared instance on loopback.
     pub fn connect(target_addr: String, target_port: u16, name: String) -> Result<Arc<Self>> {
         let addr = format!("{}:{}", target_addr, target_port);
+        crate::log_debug!("Connecting to shared instance at {}", addr);
         let stream = TcpStream::connect(&addr).map_err(|e| {
             crate::FerretError::InterfaceConnectionFailed(format!("Local connect {}: {}", addr, e))
         })?;
         stream.set_nodelay(true)?;
+        crate::log_verbose!("Connected to shared instance at {}", addr);
         let iface = Self::build(stream, name, target_addr, target_port, true)?;
         let c = Arc::clone(&iface);
         std::thread::Builder::new()
@@ -166,6 +177,7 @@ impl LocalClientInterface {
         let hw_mtu = self.base.hw_mtu.unwrap_or(524_288);
         let mut decoder = HdlcDecoder::new(hw_mtu);
         let mut buf = [0u8; 4096];
+        crate::log_debug!("Local interface read loop started: {}", self.base.name);
         loop {
             if self.shutdown.load(Ordering::Relaxed) { break; }
             let n = {
@@ -176,15 +188,22 @@ impl LocalClientInterface {
                 }
             };
             if n == 0 { self.handle_disconnect(); break; }
+            crate::log_extreme!("{}: received {} bytes", self.base.name, n);
             for frame in decoder.feed(&buf[..n]) {
-                if !frame.is_empty() { self.base.process_incoming(&frame); }
+                if !frame.is_empty() {
+                    crate::log_extreme!("{}: decoded frame ({} bytes)", self.base.name, frame.len());
+                    self.base.process_incoming(&frame);
+                }
             }
         }
+        crate::log_debug!("Local interface read loop ended: {}", self.base.name);
     }
 
     fn handle_disconnect(self: &Arc<Self>) {
+        crate::log_verbose!("Local client disconnected: {}:{}", self.target_addr, self.target_port);
         self.base.online.store(false, Ordering::Relaxed);
         if self.initiator && !self.shutdown.load(Ordering::Relaxed) {
+            crate::log_debug!("Attempting reconnect to shared instance");
             self.reconnect();
         } else {
             self.detach();
@@ -197,10 +216,12 @@ impl LocalClientInterface {
             if self.shutdown.load(Ordering::Relaxed) { break; }
             std::thread::sleep(Duration::from_secs(RECONNECT_WAIT));
             let addr = format!("{}:{}", self.target_addr, self.target_port);
+            crate::log_debug!("Reconnecting to shared instance at {}", addr);
             if let Ok(stream) = TcpStream::connect(&addr) {
                 let _ = stream.set_nodelay(true);
                 *self.socket.lock().unwrap_or_else(|e| e.into_inner()) = Some(stream);
                 self.base.online.store(true, Ordering::Relaxed);
+                crate::log_verbose!("Reconnected to shared instance at {}", addr);
                 break;
             }
         }
