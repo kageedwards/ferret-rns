@@ -4,6 +4,65 @@ version = "0.1.0"
 edition = "2021"
 description = "Ferret — A Rust implementation of the Reticulum Network Stack"
 
+# Keep the existing main.rs binary for backwards compatibility
+[[bin]]
+name = "ferret-rns"
+path = "src/main.rs"
+
+[[bin]]
+name = "rnsd"
+path = "src/bin/rnsd.rs"
+
+[[bin]]
+name = "rnstatus"
+path = "src/bin/rnstatus.rs"
+
+[[bin]]
+name = "rnpath"
+path = "src/bin/rnpath.rs"
+
+[[bin]]
+name = "rnprobe"
+path = "src/bin/rnprobe.rs"
+
+[[bin]]
+name = "rnid"
+path = "src/bin/rnid.rs"
+
+[[bin]]
+name = "rncp"
+path = "src/bin/rncp.rs"
+
+[[bin]]
+name = "rnx"
+path = "src/bin/rnx.rs"
+
+[[bin]]
+name = "rnnamed"
+path = "src/bin/rnnamed.rs"
+
+[[bin]]
+name = "rnlog"
+path = "src/bin/rnlog.rs"
+
+[[bin]]
+name = "rnlink"
+path = "src/bin/rnlink.rs"
+
+[[bin]]
+name = "rnbench"
+path = "src/bin/rnbench.rs"
+
+[[bin]]
+name = "rnmon"
+path = "src/bin/rnmon.rs"
+required-features = ["tui"]
+
+[[bin]]
+name = "rnodeconf"
+path = "src/bin/rnodeconf.rs"
+required-features = ["serial"]
+
 [dependencies]
 x25519-dalek = { version = "2", features = ["static_secrets"] }
 ed25519-dalek = { version = "2", features = ["rand_core"] }
@@ -18,6 +77,7 @@ rmpv = "1"
 serde = { version = "1", features = ["derive"] }
 serde_bytes = "0.11"
 serde-pickle = "1"
+serde_json = "1"
 thiserror = "2"
 bzip2 = "0.5"
 socket2 = "0.5"
@@ -33,13 +93,16 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros"], optional = tr
 serialport = { version = "4", optional = true }
 libloading = { version = "0.8", optional = true }
 mio = { version = "1", optional = true }
+ratatui = { version = "0.29", optional = true }
+crossterm = { version = "0.28", optional = true }
 
 [features]
-default = ["quic", "serial", "backbone"]
+default = ["quic", "serial", "backbone", "tui"]
 quic = ["dep:bytes", "dep:quinn", "dep:rustls", "dep:rcgen", "dep:tokio"]
 serial = ["dep:serialport"]
 plugins = ["dep:libloading"]
 backbone = ["dep:mio"]
+tui = ["dep:ratatui", "dep:crossterm"]
 
 [dev-dependencies]
 proptest = "1"
