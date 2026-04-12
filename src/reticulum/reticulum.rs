@@ -428,8 +428,8 @@ impl Reticulum {
             server.detach();
         }
 
-        // Detach all registered interfaces — the shutdown flag signals
-        // background read loops to stop. Log the count for diagnostics.
+        // Detach all registered interfaces — actively close sockets so
+        // blocking read loops unblock and exit.
         match self.transport_state.read() {
             Ok(inner) => {
                 let count = inner.interfaces.len();

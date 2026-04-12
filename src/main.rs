@@ -53,4 +53,10 @@ fn main() {
     }
 
     reticulum.exit_handler();
+
+    // Force process exit — background threads with blocking socket reads
+    // won't notice the shutdown flag until their sockets close. The exit
+    // handler has already persisted all state, so it's safe to exit now.
+    // This matches the Python reference which calls os._exit(0).
+    process::exit(0);
 }
