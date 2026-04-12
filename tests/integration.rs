@@ -653,7 +653,7 @@ fn integration_full_reticulum_lifecycle() {
     }
 
     // --- Verify transport identity file exists on disk ---
-    let identity_path = base.join("storage").join("identity");
+    let identity_path = base.join("storage").join("transport_identity");
     assert!(
         identity_path.exists(),
         "transport identity file should exist on disk"

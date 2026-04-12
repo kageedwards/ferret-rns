@@ -224,7 +224,7 @@ impl Reticulum {
         log_debug!("Loading transport identity");
         let identity_path = match ret_sec.network_identity {
             Some(ref custom_path) => custom_path.clone(),
-            None => paths.storagepath.join("identity"),
+            None => paths.storagepath.join("transport_identity"),
         };
         let transport_identity = load_or_create_identity(&identity_path)?;
 
@@ -1130,7 +1130,7 @@ mod tests {
         };
         let ret = Reticulum::new(config).unwrap();
         // Identity file should exist in storage
-        assert!(base.join("storage").join("identity").exists());
+        assert!(base.join("storage").join("transport_identity").exists());
         // Identity should have a valid hash
         assert!(ret.transport_identity.hash().is_ok());
     }
