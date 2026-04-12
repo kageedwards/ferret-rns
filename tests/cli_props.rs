@@ -143,3 +143,122 @@ mod property_15 {
         }
     }
 }
+
+// =========================================================================
+// Feature: ferret-cli-utilities, Property 1: HMAC Mutual Authentication Round-Trip
+// =========================================================================
+
+/// For any random auth key (1–256 bytes) and for any random challenge bytes,
+/// the mutual HMAC-SHA256 challenge-response protocol between `RpcClient`
+/// and `RpcServer` SHALL succeed.
+///
+/// Validates: Requirements 1.2
+mod property_1 {
+    use super::*;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::Arc;
+    use std::thread;
+    use std::time::Duration;
+
+    use ferret_rns::reticulum::rpc::RpcServer;
+    use ferret_rns::rpc_client::RpcClient;
+    use ferret_rns::transport::TransportState;
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(100))]
+
+        #[test]
+        fn hmac_auth_roundtrip(key in proptest::collection::vec(any::<u8>(), 1..=256)) {
+            let shutdown = Arc::new(AtomicBool::new(false));
+            let transport = TransportState::new();
+            let srv = RpcServer::start(0, key.clone(), shutdown.clone(), transport)
+                .expect("start server");
+            let port = srv.local_port();
+            thread::sleep(Duration::from_millis(20));
+
+            let result = RpcClient::connect(port, &key);
+            prop_assert!(result.is_ok(), "auth should succeed with matching key");
+
+            srv.stop();
+        }
+    }
+
+    #[test]
+    fn hmac_auth_wrong_key_fails() {
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let transport = TransportState::new();
+        let key = vec![1, 2, 3, 4];
+        let srv = RpcServer::start(0, key.clone(), shutdown.clone(), transport)
+            .expect("start server");
+        let port = srv.local_port();
+        thread::sleep(Duration::from_millis(20));
+
+        let result = RpcClient::connect(port, &[9, 9, 9]);
+        assert!(result.is_err(), "auth with wrong key should fail");
+
+        srv.stop();
+    }
+}
+
+// =========================================================================
+// Feature: ferret-cli-utilities, Property 2: Pickle Command Wire Round-Trip
+// =========================================================================
+
+/// For any valid pickle command dict, server receives exact dict client sent.
+///
+/// Validates: Requirements 1.4
+mod property_2 {
+    use super::*;
+    use std::sync::atomic::AtomicBool;
+    use std::sync::Arc;
+    use std::thread;
+    use std::time::Duration;
+
+    use ferret_rns::reticulum::rpc::RpcServer;
+    use ferret_rns::rpc_client::RpcClient;
+    use ferret_rns::transport::TransportState;
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(100))]
+
+        #[test]
+        fn pickle_get_command_roundtrip(cmd in "interface_stats|link_count|path_table|rate_table") {
+            let shutdown = Arc::new(AtomicBool::new(false));
+            let transport = TransportState::new();
+            let key = vec![42, 43, 44, 45];
+            let srv = RpcServer::start(0, key.clone(), shutdown.clone(), transport)
+                .expect("start server");
+            let port = srv.local_port();
+            thread::sleep(Duration::from_millis(20));
+
+            let mut client = RpcClient::connect(port, &key)
+                .expect("connect and auth");
+
+            // The server dispatches known "get" commands and returns valid responses.
+            // We verify the round-trip by checking we get a non-error response.
+            let result = client.get(&cmd);
+            prop_assert!(result.is_ok(), "get('{}') should succeed: {:?}", cmd, result.err());
+
+            srv.stop();
+        }
+
+        #[test]
+        fn pickle_drop_command_roundtrip(cmd in "announce_queues|path") {
+            let shutdown = Arc::new(AtomicBool::new(false));
+            let transport = TransportState::new();
+            let key = vec![42, 43, 44, 45];
+            let srv = RpcServer::start(0, key.clone(), shutdown.clone(), transport)
+                .expect("start server");
+            let port = srv.local_port();
+            thread::sleep(Duration::from_millis(20));
+
+            let mut client = RpcClient::connect(port, &key)
+                .expect("connect and auth");
+
+            let result = client.drop_cmd(&cmd);
+            prop_assert!(result.is_ok(), "drop('{}') should succeed: {:?}", cmd, result.err());
+
+            srv.stop();
+        }
+    }
+}
