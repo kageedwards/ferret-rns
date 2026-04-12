@@ -34,6 +34,10 @@ Ferret is functional and interoperable with the Python reference stack. It has b
 - Link establishment and channel communication
 - Resource transfers
 
+### May work
+
+- QUIC transport interface (experimental, built with the `quic` feature flag — not yet tested against live peers)
+
 ## Quick start
 
 ```sh
