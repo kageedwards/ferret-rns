@@ -61,16 +61,72 @@ impl TransportState {
             raw.len(),
         );
 
-        // Step 1b: Local client routing — track source destinations from
-        // local client interfaces so we can route replies back to them.
+        // Step 1b: Local client routing.
+        // If packet arrived from a local client, forward it to all network
+        // (non-local-client) interfaces for outbound transmission, and also
+        // to other local clients.
+        // If packet arrived from a network interface, forward it to ALL
+        // connected local client interfaces (broadcast to local clients,
+        // matching the Python reference shared instance behavior).
         let from_local_client = interface.is_local_client();
         if from_local_client {
-            let mut inner = self.write()?;
-            inner.local_client_destinations.insert(
-                packet.destination_hash,
-                Arc::clone(interface),
-            );
+            // Forward to all non-local-client (network) interfaces
+            let inner = self.read()?;
+            let network_ifaces: Vec<Arc<dyn InterfaceHandle>> = inner
+                .interfaces
+                .iter()
+                .filter(|i| !i.is_local_client() && i.is_outbound())
+                .cloned()
+                .collect();
+            // Also forward to other local clients (not the sender)
+            let other_locals: Vec<Arc<dyn InterfaceHandle>> = inner
+                .interfaces
+                .iter()
+                .filter(|i| i.is_local_client() && !Arc::ptr_eq(i, interface))
+                .cloned()
+                .collect();
             drop(inner);
+
+            for iface in &network_ifaces {
+                if let Err(e) = iface.transmit(&packet.raw) {
+                    log_warning!("Failed to forward local client packet to network: {}", e);
+                }
+            }
+            for iface in &other_locals {
+                if let Err(e) = iface.transmit(&packet.raw) {
+                    log_warning!("Failed to forward to other local client: {}", e);
+                }
+            }
+            log_extreme!(
+                "Local client packet forwarded to {} network + {} local iface(s)",
+                network_ifaces.len(),
+                other_locals.len(),
+            );
+        } else {
+            // Forward network packets to all local clients
+            let inner = self.read()?;
+            let local_clients: Vec<Arc<dyn InterfaceHandle>> = inner
+                .interfaces
+                .iter()
+                .filter(|i| i.is_local_client())
+                .cloned()
+                .collect();
+            drop(inner);
+
+            for local_iface in &local_clients {
+                if let Err(e) = local_iface.transmit(&packet.raw) {
+                    log_warning!("Failed to forward to local client: {}", e);
+                }
+            }
+            if !local_clients.is_empty() {
+                log_extreme!(
+                    "Forwarded to {} local client(s): dest {:02x}{:02x}{:02x}{:02x}.. type={:?}",
+                    local_clients.len(),
+                    packet.destination_hash[0], packet.destination_hash[1],
+                    packet.destination_hash[2], packet.destination_hash[3],
+                    packet.packet_type,
+                );
+            }
         }
 
         // Step 2: Apply packet_filter
@@ -96,20 +152,6 @@ impl TransportState {
 
         if !in_link_table && !is_lrproof {
             self.add_packet_hash(&packet_hash)?;
-        }
-
-        // Step 3b: If packet arrived on a network interface and is destined
-        // for a local client, forward it to the appropriate LocalClientInterface.
-        if !from_local_client {
-            let inner = self.read()?;
-            if let Some(local_iface) = inner.local_client_destinations.get(&packet.destination_hash) {
-                let local_iface = Arc::clone(local_iface);
-                drop(inner);
-                log_extreme!("Forwarding packet to local client for dest {:02x?}", &packet.destination_hash[..4]);
-                local_iface.transmit(&packet.raw)?;
-                return Ok(());
-            }
-            drop(inner);
         }
 
         // Step 4: Transport forwarding
