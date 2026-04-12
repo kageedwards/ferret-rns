@@ -113,15 +113,32 @@ impl TransportState {
                 .collect();
             drop(inner);
 
+            let mut dead_hashes: Vec<Vec<u8>> = Vec::new();
             for local_iface in &local_clients {
-                if let Err(e) = local_iface.transmit(&packet.raw) {
-                    log_warning!("Failed to forward to local client: {}", e);
+                if let Err(_) = local_iface.transmit(&packet.raw) {
+                    dead_hashes.push(local_iface.interface_hash().to_vec());
                 }
             }
-            if !local_clients.is_empty() {
+
+            // Remove dead local clients from the interfaces list
+            if !dead_hashes.is_empty() {
+                if let Ok(mut inner) = self.write() {
+                    let before = inner.interfaces.len();
+                    inner.interfaces.retain(|i| {
+                        !i.is_local_client() || !dead_hashes.contains(&i.interface_hash().to_vec())
+                    });
+                    let removed = before - inner.interfaces.len();
+                    if removed > 0 {
+                        log_verbose!("Removed {} disconnected local client(s)", removed);
+                    }
+                }
+            }
+
+            let forwarded = local_clients.len() - dead_hashes.len();
+            if forwarded > 0 {
                 log_extreme!(
                     "Forwarded to {} local client(s): dest {:02x}{:02x}{:02x}{:02x}.. type={:?}",
-                    local_clients.len(),
+                    forwarded,
                     packet.destination_hash[0], packet.destination_hash[1],
                     packet.destination_hash[2], packet.destination_hash[3],
                     packet.packet_type,
