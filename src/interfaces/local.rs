@@ -25,6 +25,8 @@ pub struct LocalServerInterface {
     pub spawned: Mutex<Vec<Arc<LocalClientInterface>>>,
     listener: Mutex<Option<TcpListener>>,
     shutdown: AtomicBool,
+    /// TransportState reference for wiring spawned client interfaces.
+    transport: Mutex<Option<crate::transport::TransportState>>,
 }
 
 impl LocalServerInterface {
@@ -45,6 +47,7 @@ impl LocalServerInterface {
             spawned: Mutex::new(Vec::new()),
             listener: Mutex::new(Some(listener)),
             shutdown: AtomicBool::new(false),
+            transport: Mutex::new(None),
         });
         let c = Arc::clone(&iface);
         std::thread::Builder::new()
@@ -75,6 +78,19 @@ impl LocalServerInterface {
             match LocalClientInterface::from_socket(stream, name) {
                 Ok(client) => {
                     crate::log_debug!("Spawned local client interface for {}", peer);
+
+                    // Wire the spawned client to TransportState so it can
+                    // deliver inbound packets and receive outbound traffic.
+                    if let Ok(guard) = self.transport.lock() {
+                        if let Some(ref ts) = *guard {
+                            let handle: Arc<dyn crate::transport::InterfaceHandle> = client.base.clone();
+                            client.base.set_transport(ts.clone(), handle.clone());
+                            if let Ok(mut inner) = ts.write() {
+                                inner.interfaces.push(handle);
+                            }
+                        }
+                    }
+
                     let mut spawned = self.spawned.lock().unwrap_or_else(|e| e.into_inner());
                     spawned.retain(|c| !c.base.detached.load(Ordering::Relaxed));
                     spawned.push(client);
@@ -83,6 +99,13 @@ impl LocalServerInterface {
                     crate::log_warning!("Failed to create local client for {}: {}", peer, e);
                 }
             }
+        }
+    }
+
+    /// Set the TransportState so spawned client interfaces can be wired.
+    pub fn set_server_transport(&self, ts: crate::transport::TransportState) {
+        if let Ok(mut guard) = self.transport.lock() {
+            *guard = Some(ts);
         }
     }
 
@@ -160,6 +183,8 @@ impl LocalClientInterface {
         let mut base = Interface::new(name, Some(transmit_fn));
         base.bitrate = BITRATE;
         base.dir_in = true;
+        base.dir_out = true;
+        base.is_local_client_interface = !initiator;
         base.online.store(true, Ordering::Relaxed);
         base.autoconfigure_mtu = true;
         base.optimise_mtu();

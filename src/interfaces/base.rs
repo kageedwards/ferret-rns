@@ -89,6 +89,9 @@ pub struct Interface {
     pub dir_in: bool,
     pub dir_out: bool,
 
+    // Local client flag (shared instance spawned clients)
+    pub is_local_client_interface: bool,
+
     // Transport
     pub bitrate: u64,
     pub hw_mtu: Option<usize>,
@@ -151,6 +154,7 @@ impl Interface {
             detached: AtomicBool::new(false),
             dir_in: false,
             dir_out: false,
+            is_local_client_interface: false,
             bitrate: 62500,
             hw_mtu: None,
             autoconfigure_mtu: false,
@@ -582,5 +586,9 @@ impl InterfaceHandle for Interface {
 
     fn is_online(&self) -> bool {
         self.online.load(Ordering::Relaxed)
+    }
+
+    fn is_local_client(&self) -> bool {
+        self.is_local_client_interface
     }
 }

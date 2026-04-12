@@ -586,6 +586,7 @@ fn setup_shared_instance(ret: &mut Reticulum, user_config: &ReticulumConfig, tra
                 server.base.set_transport(transport.clone(), handle.clone());
                 transport.write()?.interfaces.push(handle);
 
+                server.set_server_transport(transport.clone());
                 ret.shared_instance_interface = Some(server);
             }
             Err(e) => {
