@@ -342,7 +342,7 @@ mod property_4 {
 mod name_helpers {
     use ferret_rns::identity::Identity;
     use ferret_rns::names::record::NameRecord;
-    use ferret_rns::names::stamp::generate_stamp;
+    use ferret_rns::names::stamp::{generate_stamp, NAME_SERVICE_EXPAND_ROUNDS};
 
     /// Create a valid name record with a low-difficulty stamp for testing.
     pub fn make_record(label: &str, identity: &Identity, timestamp: f64) -> NameRecord {
@@ -364,8 +364,8 @@ mod name_helpers {
             signature: vec![0u8; 64],
         };
 
-        // Generate stamp with difficulty 1 (fast for tests)
-        let stamp = generate_stamp(&record.stamp_data(), 1);
+        // Generate stamp with difficulty 1 and few expand rounds (fast for tests)
+        let (stamp, _value) = generate_stamp(&record.stamp_data(), 1, 2);
         record.stamp = stamp;
 
         // Re-sign with updated stamp
@@ -503,6 +503,7 @@ mod property_8 {
     fn max_per_suffix_enforced() {
         let config = ResolverConfig {
             stamp_difficulty: 1,
+            stamp_expand_rounds: 2,
             max_per_suffix: 3,
             rate_limit_seconds: 0.0, // disable rate limit for this test
             ..Default::default()
@@ -536,6 +537,7 @@ mod property_9 {
     fn rate_limit_within_window() {
         let config = ResolverConfig {
             stamp_difficulty: 1,
+            stamp_expand_rounds: 2,
             max_per_suffix: 10,
             rate_limit_seconds: 3600.0,
             ..Default::default()
@@ -555,6 +557,7 @@ mod property_9 {
     fn rate_limit_after_window() {
         let config = ResolverConfig {
             stamp_difficulty: 1,
+            stamp_expand_rounds: 2,
             max_per_suffix: 10,
             rate_limit_seconds: 3600.0,
             ..Default::default()
@@ -624,6 +627,7 @@ mod property_11 {
     fn blackholed_identity_rejected() {
         let config = ResolverConfig {
             stamp_difficulty: 1,
+            stamp_expand_rounds: 2,
             rate_limit_seconds: 0.0,
             ..Default::default()
         };
@@ -641,6 +645,7 @@ mod property_11 {
     fn non_blackholed_accepted() {
         let config = ResolverConfig {
             stamp_difficulty: 1,
+            stamp_expand_rounds: 2,
             rate_limit_seconds: 0.0,
             ..Default::default()
         };

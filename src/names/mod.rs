@@ -11,4 +11,4 @@ pub mod stamp;
 pub use record::NameRecord;
 pub use store::NameStore;
 pub use resolver::NameResolver;
-pub use stamp::{generate_stamp, verify_stamp};
+pub use stamp::{generate_stamp, verify_stamp, stamp_workblock, stamp_valid, stamp_value};

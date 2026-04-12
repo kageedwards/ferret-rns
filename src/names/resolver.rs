@@ -3,13 +3,15 @@
 use std::collections::HashMap;
 
 use crate::names::record::NameRecord;
-use crate::names::stamp::verify_stamp;
+use crate::names::stamp::{stamp_workblock, stamp_valid, NAME_SERVICE_EXPAND_ROUNDS};
 use crate::names::store::NameStore;
 
 /// Configuration for the name resolver.
 pub struct ResolverConfig {
     /// Minimum proof-of-work difficulty (default: 14)
     pub stamp_difficulty: u8,
+    /// Workblock expansion rounds for stamp verification
+    pub stamp_expand_rounds: usize,
     /// Maximum registrations per identity suffix (default: 5)
     pub max_per_suffix: usize,
     /// Record TTL in seconds (default: 30 days)
@@ -22,6 +24,7 @@ impl Default for ResolverConfig {
     fn default() -> Self {
         Self {
             stamp_difficulty: 14,
+            stamp_expand_rounds: NAME_SERVICE_EXPAND_ROUNDS,
             max_per_suffix: 5,
             ttl_seconds: 30.0 * 24.0 * 3600.0, // 30 days
             rate_limit_seconds: 3600.0,          // 1 hour
@@ -81,11 +84,8 @@ impl NameResolver {
         }
 
         // 4. Verify stamp difficulty
-        if !verify_stamp(
-            &record.stamp_data(),
-            &record.stamp,
-            self.config.stamp_difficulty,
-        ) {
+        let workblock = stamp_workblock(&record.stamp_data(), self.config.stamp_expand_rounds);
+        if !stamp_valid(&workblock, &record.stamp, self.config.stamp_difficulty) {
             return Err(format!(
                 "proof-of-work stamp does not meet minimum difficulty {}",
                 self.config.stamp_difficulty
