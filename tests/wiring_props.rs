@@ -131,8 +131,9 @@ fn recv_bytes(stream: &mut TcpStream) -> Vec<u8> {
     buf
 }
 
-/// Perform the client side of the HMAC-SHA256 challenge-response handshake.
+/// Perform the client side of the mutual HMAC-SHA256 challenge-response handshake.
 fn client_authenticate(stream: &mut TcpStream, authkey: &[u8]) {
+    // Step 1: Answer the server's challenge
     let challenge = recv_bytes(stream);
     assert!(challenge.starts_with(CHALLENGE_PREFIX));
     let message = &challenge[CHALLENGE_PREFIX.len()..];
@@ -142,7 +143,26 @@ fn client_authenticate(stream: &mut TcpStream, authkey: &[u8]) {
     response.extend_from_slice(&mac);
     send_bytes(stream, &response);
     let result = recv_bytes(stream);
-    assert_eq!(result, WELCOME, "HMAC authentication should succeed");
+    assert_eq!(result, WELCOME, "Server should accept our HMAC");
+
+    // Step 2: Challenge the server
+    let mut random_bytes = [0u8; 40];
+    rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut random_bytes);
+    let mut challenge_msg = Vec::new();
+    challenge_msg.extend_from_slice(CHALLENGE_PREFIX);
+    challenge_msg.extend_from_slice(DIGEST_PREFIX);
+    challenge_msg.extend_from_slice(&random_bytes);
+    send_bytes(stream, &challenge_msg);
+
+    let server_response = recv_bytes(stream);
+    assert!(server_response.len() >= DIGEST_PREFIX.len() + 32);
+    let server_mac = &server_response[DIGEST_PREFIX.len()..];
+    let mut hmac_msg = Vec::new();
+    hmac_msg.extend_from_slice(DIGEST_PREFIX);
+    hmac_msg.extend_from_slice(&random_bytes);
+    let expected = hmac_sha256(authkey, &hmac_msg);
+    assert_eq!(server_mac, expected.as_slice(), "Server HMAC should match");
+    send_bytes(stream, WELCOME);
 }
 
 /// Build a pickle dict Value from key-value pairs.

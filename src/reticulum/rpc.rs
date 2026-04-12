@@ -244,8 +244,13 @@ impl RpcServer {
         stream.set_nonblocking(false)?;
         stream.set_read_timeout(Some(Duration::from_secs(15)))?;
 
-        // --- HMAC challenge-response authentication ---
+        // --- Mutual HMAC challenge-response authentication ---
+        // Step 1: Server challenges client (deliver_challenge)
         if !self.deliver_challenge(&mut stream)? {
+            return Ok(());
+        }
+        // Step 2: Client challenges server (answer_challenge)
+        if !self.answer_challenge(&mut stream)? {
             return Ok(());
         }
 
@@ -307,6 +312,66 @@ impl RpcServer {
         }
 
         send_bytes(stream, WELCOME)?;
+        Ok(true)
+    }
+
+    /// Perform the server side of answering the CLIENT's challenge.
+    /// The client sends its own challenge after we've authenticated it.
+    /// We must respond with the correct HMAC to prove we know the key.
+    fn answer_challenge(&self, stream: &mut TcpStream) -> Result<bool> {
+        // 1. Read the client's challenge
+        let challenge = recv_bytes(stream)?;
+
+        // 2. Verify it starts with #CHALLENGE#
+        if !challenge.starts_with(CHALLENGE_PREFIX) {
+            log_warning!("RPC: client challenge missing #CHALLENGE# prefix");
+            return Ok(false);
+        }
+
+        // 3. Extract the message (everything after #CHALLENGE#)
+        let message = &challenge[CHALLENGE_PREFIX.len()..];
+
+        // 4. Compute HMAC response
+        // Check if message has a {digest_name} prefix
+        let (digest_prefix, _) = if message.starts_with(b"{") {
+            // Find the closing }
+            if let Some(end) = message.iter().position(|&b| b == b'}') {
+                let prefix = &message[..=end];
+                (prefix, &message[end + 1..])
+            } else {
+                (&b""[..], message)
+            }
+        } else {
+            (&b""[..], message)
+        };
+
+        // Compute HMAC over the ENTIRE message (including digest prefix)
+        let mac = hmac_sha256(&self.rpc_key, message);
+
+        // Build response: {sha256} + MAC (or raw MAC for legacy)
+        let response = if digest_prefix.is_empty() {
+            // Legacy: raw HMAC-MD5 (but we use SHA256 since MD5 may not be available)
+            let mut r = Vec::with_capacity(DIGEST_PREFIX.len() + 32);
+            r.extend_from_slice(DIGEST_PREFIX);
+            r.extend_from_slice(&mac);
+            r
+        } else {
+            // Modern: {sha256} + HMAC-SHA256
+            let mut r = Vec::with_capacity(DIGEST_PREFIX.len() + 32);
+            r.extend_from_slice(DIGEST_PREFIX);
+            r.extend_from_slice(&mac);
+            r
+        };
+
+        send_bytes(stream, &response)?;
+
+        // 5. Read welcome/failure from client
+        let result = recv_bytes(stream)?;
+        if result != WELCOME {
+            log_warning!("RPC: server's response was rejected by client");
+            return Ok(false);
+        }
+
         Ok(true)
     }
 
@@ -625,27 +690,55 @@ mod tests {
     use crate::transport::TransportState;
     use std::net::TcpStream;
 
-    /// Perform the client side of the HMAC challenge-response handshake.
+    /// Perform the client side of the mutual HMAC challenge-response handshake.
     fn client_authenticate(stream: &mut TcpStream, authkey: &[u8]) -> bool {
-        // 1. Receive challenge
-        let challenge = recv_bytes(stream).expect("recv challenge");
-
-        // Verify it starts with #CHALLENGE#
+        // Step 1: Answer the server's challenge
+        let challenge = recv_bytes(stream).expect("recv server challenge");
         assert!(challenge.starts_with(CHALLENGE_PREFIX));
-
-        // Extract the message part after #CHALLENGE# (= {sha256} + random)
         let message = &challenge[CHALLENGE_PREFIX.len()..];
-
-        // 2. Compute HMAC and send response: {sha256} + HMAC(key, message)
         let mac = hmac_sha256(authkey, message);
         let mut response = Vec::with_capacity(DIGEST_PREFIX.len() + 32);
         response.extend_from_slice(DIGEST_PREFIX);
         response.extend_from_slice(&mac);
         send_bytes(stream, &response).expect("send auth response");
-
-        // 3. Read welcome/failure
         let result = recv_bytes(stream).expect("recv auth result");
-        result == WELCOME
+        if result != WELCOME {
+            return false;
+        }
+
+        // Step 2: Challenge the server (deliver_challenge from client side)
+        let mut random_bytes = [0u8; CHALLENGE_RANDOM_LEN];
+        rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut random_bytes);
+        let mut challenge_msg = Vec::with_capacity(
+            CHALLENGE_PREFIX.len() + DIGEST_PREFIX.len() + CHALLENGE_RANDOM_LEN,
+        );
+        challenge_msg.extend_from_slice(CHALLENGE_PREFIX);
+        challenge_msg.extend_from_slice(DIGEST_PREFIX);
+        challenge_msg.extend_from_slice(&random_bytes);
+        send_bytes(stream, &challenge_msg).expect("send client challenge");
+
+        // Read server's response
+        let server_response = recv_bytes(stream).expect("recv server auth response");
+        if server_response.len() < DIGEST_PREFIX.len() {
+            return false;
+        }
+        let (prefix, server_mac) = server_response.split_at(DIGEST_PREFIX.len());
+        if prefix != DIGEST_PREFIX || server_mac.len() != 32 {
+            return false;
+        }
+
+        // Verify server's HMAC
+        let mut hmac_message = Vec::with_capacity(DIGEST_PREFIX.len() + CHALLENGE_RANDOM_LEN);
+        hmac_message.extend_from_slice(DIGEST_PREFIX);
+        hmac_message.extend_from_slice(&random_bytes);
+        let expected_mac = hmac_sha256(authkey, &hmac_message);
+        if !constant_time_eq(server_mac, &expected_mac) {
+            send_bytes(stream, FAILURE).expect("send failure");
+            return false;
+        }
+
+        send_bytes(stream, WELCOME).expect("send welcome");
+        true
     }
 
     /// Send a pickle command and receive a pickle response.
