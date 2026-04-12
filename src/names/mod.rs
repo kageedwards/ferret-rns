@@ -6,9 +6,11 @@
 pub mod record;
 pub mod store;
 pub mod resolver;
-pub mod stamp;
 
 pub use record::NameRecord;
 pub use store::NameStore;
 pub use resolver::NameResolver;
-pub use stamp::{generate_stamp, verify_stamp, stamp_workblock, stamp_valid, stamp_value};
+
+// Stamp functionality lives in crypto::stamp (shared with Discovery).
+// Re-export for convenience.
+pub use crate::crypto::stamp::{generate_stamp, verify_stamp, stamp_workblock, stamp_valid, stamp_value};

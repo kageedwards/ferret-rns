@@ -342,7 +342,7 @@ mod property_4 {
 mod name_helpers {
     use ferret_rns::identity::Identity;
     use ferret_rns::names::record::NameRecord;
-    use ferret_rns::names::stamp::{generate_stamp, NAME_SERVICE_EXPAND_ROUNDS};
+    use ferret_rns::crypto::stamp::{generate_stamp, NAME_SERVICE_EXPAND_ROUNDS};
 
     /// Create a valid name record with a low-difficulty stamp for testing.
     pub fn make_record(label: &str, identity: &Identity, timestamp: f64) -> NameRecord {

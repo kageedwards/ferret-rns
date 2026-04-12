@@ -6,6 +6,7 @@ pub mod hkdf;
 pub mod aes_cbc;
 pub mod pkcs7;
 pub mod token;
+pub mod stamp;
 
 // Re-exports for convenient access
 pub use x25519::{X25519PrivateKey, X25519PublicKey};

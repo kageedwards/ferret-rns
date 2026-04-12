@@ -129,10 +129,26 @@ impl InterfaceAnnounceHandler {
         // Try to unpack msgpack from the beginning; remainder is stamp
         let (info_dict, stamp) = Self::split_info_and_stamp(working_payload)?;
 
-        // Validate stamp (placeholder: just check stamp length > 0)
+        // Validate stamp via LXStamper PoW algorithm
         if stamp.is_empty() {
             return Err(FerretError::DiscoveryError("missing stamp".into()));
         }
+
+        // Compute info_hash for workblock generation (same as announcer)
+        let info_bytes = &working_payload[..working_payload.len() - stamp.len()];
+        let info_hash = crate::crypto::hashes::sha256(info_bytes);
+        let workblock = crate::crypto::stamp::stamp_workblock(
+            &info_hash,
+            crate::crypto::stamp::WORKBLOCK_EXPAND_ROUNDS,
+        );
+
+        if !crate::crypto::stamp::stamp_valid(&workblock, stamp, self.required_value) {
+            return Err(FerretError::DiscoveryError(
+                format!("stamp does not meet required value {}", self.required_value),
+            ));
+        }
+
+        let value = crate::crypto::stamp::stamp_value(&workblock, stamp) as u8;
 
         // Build DiscoveredInterfaceInfo from the info dictionary
         let now = std::time::SystemTime::now()
@@ -185,7 +201,7 @@ impl InterfaceAnnounceHandler {
             name,
             received: now,
             stamp: stamp.to_vec(),
-            value: self.required_value,
+            value: value,
             transport_id: transport_id_hex,
             network_id: network_id_hex,
             hops: 0,

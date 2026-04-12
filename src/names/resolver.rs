@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use crate::names::record::NameRecord;
-use crate::names::stamp::{stamp_workblock, stamp_valid, NAME_SERVICE_EXPAND_ROUNDS};
+use crate::crypto::stamp::{stamp_workblock, stamp_valid, NAME_SERVICE_EXPAND_ROUNDS};
 use crate::names::store::NameStore;
 
 /// Configuration for the name resolver.

@@ -260,8 +260,8 @@ impl InterfaceAnnouncer {
             FerretError::Serialization(format!("msgpack encode: {}", e))
         })?;
 
-        // Compute proof-of-work stamp (placeholder: random bytes)
-        let stamp_value = info
+        // Compute proof-of-work stamp
+        let stamp_cost = info
             .discovery_stamp_value
             .unwrap_or(DEFAULT_STAMP_VALUE);
         let info_hash = crate::crypto::hashes::sha256(&packed_info);
@@ -271,9 +271,11 @@ impl InterfaceAnnouncer {
             .get(&info_hash)
             .cloned()
             .unwrap_or_else(|| {
-                // Placeholder stamp: 8 random bytes (real PoW deferred to Layer 7)
-                let mut s = vec![0u8; 8];
-                rand::RngCore::fill_bytes(&mut rand::thread_rng(), &mut s);
+                let (s, _value) = crate::crypto::stamp::generate_stamp(
+                    &info_hash,
+                    stamp_cost,
+                    crate::crypto::stamp::WORKBLOCK_EXPAND_ROUNDS,
+                );
                 s
             });
         self.stamp_cache.insert(info_hash, stamp.clone());
@@ -284,7 +286,6 @@ impl InterfaceAnnouncer {
 
         // Construct flags byte
         let mut flags: u8 = 0;
-        let _ = stamp_value; // used for real PoW later
 
         // Optionally encrypt with network_identity
         let final_payload = if info.discovery_encrypt {
