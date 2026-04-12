@@ -287,7 +287,6 @@ impl Reticulum {
         synthesize_interfaces(
             &parsed.interfaces,
             &reticulum.paths,
-            reticulum.panic_on_interface_error,
             &reticulum.transport_state,
         )?;
 
@@ -661,7 +660,6 @@ fn get_int(params: &HashMap<String, ConfigValue>, key: &str) -> Option<i64> {
 pub fn synthesize_interfaces(
     interfaces: &[InterfaceDefinition],
     _paths: &ReticulumPaths,
-    panic_on_error: bool,
     transport: &TransportState,
 ) -> Result<()> {
     use crate::interfaces::{auto, i2p, pipe, tcp_client, tcp_server, udp};
@@ -745,14 +743,8 @@ pub fn synthesize_interfaces(
                 let command = match get_str(params, "command") {
                     Some(c) => c,
                     None => {
-                        return if panic_on_error {
-                            Err(FerretError::InterfaceError(
-                                format!("{}: PipeInterface requires 'command' param", name),
-                            ))
-                        } else {
-                            eprintln!("Warning: {}: PipeInterface requires 'command' param, skipping", name);
-                            continue;
-                        };
+                        eprintln!("Warning: {}: PipeInterface requires 'command' param, skipping", name);
+                        continue;
                     }
                 };
                 let respawn_delay = get_int(params, "respawn_delay")
@@ -794,9 +786,7 @@ pub fn synthesize_interfaces(
                 let port_path = match get_str(params, "port") {
                     Some(p) => p,
                     None => {
-                        let msg = format!("{}: SerialInterface requires 'port' param", name);
-                        if panic_on_error { return Err(FerretError::InterfaceError(msg)); }
-                        eprintln!("Warning: {}, skipping", msg);
+                        eprintln!("Warning: {}: SerialInterface requires 'port' param, skipping", name);
                         continue;
                     }
                 };
@@ -828,9 +818,7 @@ pub fn synthesize_interfaces(
                 let port_path = match get_str(params, "port") {
                     Some(p) => p,
                     None => {
-                        let msg = format!("{}: KISSInterface requires 'port' param", name);
-                        if panic_on_error { return Err(FerretError::InterfaceError(msg)); }
-                        eprintln!("Warning: {}, skipping", msg);
+                        eprintln!("Warning: {}: KISSInterface requires 'port' param, skipping", name);
                         continue;
                     }
                 };
@@ -857,9 +845,7 @@ pub fn synthesize_interfaces(
                 let port_path = match get_str(params, "port") {
                     Some(p) => p,
                     None => {
-                        let msg = format!("{}: RNodeInterface requires 'port' param", name);
-                        if panic_on_error { return Err(FerretError::InterfaceError(msg)); }
-                        eprintln!("Warning: {}, skipping", msg);
+                        eprintln!("Warning: {}: RNodeInterface requires 'port' param, skipping", name);
                         continue;
                     }
                 };
@@ -883,9 +869,7 @@ pub fn synthesize_interfaces(
                 let port_path = match get_str(params, "port") {
                     Some(p) => p,
                     None => {
-                        let msg = format!("{}: WeaveInterface requires 'port' param", name);
-                        if panic_on_error { return Err(FerretError::InterfaceError(msg)); }
-                        eprintln!("Warning: {}, skipping", msg);
+                        eprintln!("Warning: {}: WeaveInterface requires 'port' param, skipping", name);
                         continue;
                     }
                 };
@@ -934,20 +918,13 @@ pub fn synthesize_interfaces(
                 Ok(())
             }
             unknown => {
-                let msg = format!("{}: unknown interface type '{}'", name, unknown);
-                if panic_on_error {
-                    return Err(FerretError::InterfaceError(msg));
-                }
-                eprintln!("Warning: {}, skipping", msg);
+                eprintln!("Warning: {}: unknown interface type '{}', skipping", name, unknown);
                 Ok(())
             }
         };
 
         if let Err(e) = result {
-            if panic_on_error {
-                return Err(e);
-            }
-            eprintln!("Warning: failed to start interface '{}': {}", iface_def.name, e);
+            eprintln!("Warning: failed to start interface '{}', skipping: {}", iface_def.name, e);
         }
     }
 
