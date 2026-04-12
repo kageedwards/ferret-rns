@@ -2,6 +2,10 @@
 
 A Rust implementation of the [Reticulum Network Stack](https://reticulum.network/).
 
+<p align="center">
+  <img src="assets/ferret.jpg" alt="Ferret" width="400">
+</p>
+
 Ferret is a drop-in replacement for the Python `rnsd` daemon. It runs as a shared instance that Python RNS applications — NomadNet, MeshChat, LXMF, Sideband, and any other software built on Reticulum — can connect to without modification.
 
 ## Status
