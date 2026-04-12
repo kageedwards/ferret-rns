@@ -26,15 +26,17 @@ Ferret is functional and interoperable with the Python reference stack. It has b
 - State persistence (path table, known destinations, transport identity)
 - HDLC and KISS codec framing
 - Leveled logging (Critical through Extreme)
-- CLI utilities: `rnsd`, `rnstatus`, `rnpath`, `rnid` (implemented)
+- CLI utilities: `rnsd`, `rnstatus`, `rnpath`, `rnid`, `rnprobe`, `rncp`, `rnx`, `rnlog`, `rnlink`, `rnbench`, `rnmon`, `rnnamed`, `rnodeconf`
+- Name service library with PoW anti-spam, record validation, persistent store
 
 ### What's next
 
-- Remaining CLI utilities (`rnprobe`, `rncp`, `rnx`, `rnlog`, `rnlink`, `rnbench`, `rnmon`, `rnnamed`, `rnodeconf`)
-- Name service library (`rnnamed`)
+- Live network testing of link-based utilities (`rncp`, `rnx`, `rnlink`, `rnbench`)
+- Full transport-layer integration for `rnprobe` (packet receipt callbacks)
 
 ### Should™ work
 
+- LXStamper-compatible proof-of-work stamps (discovery announcer/handler use the same HKDF workblock expansion + leading-zero-bits algorithm as the Python LXMF LXStamper, but not yet validated against live peers exchanging discovery announces)
 - IFAC (Interface Access Code) authentication
 - QUIC transport interface (experimental, built with the `quic` feature flag — not yet tested against live peers)
 
@@ -136,21 +138,21 @@ Ferret is a single-crate Rust project. The library modules are layered, and the 
 | `rnstatus` | ✅ | Network interface status display |
 | `rnpath` | ✅ | Path table management and queries |
 | `rnid` | ✅ | Identity management, encrypt/decrypt, sign/verify |
-| `rnprobe` | 🔲 | Network probe (ping-like RTT measurement) |
-| `rncp` | 🔲 | File transfer over Links |
-| `rnx` | 🔲 | Remote command execution |
-| `rnlog` | 🔲 | Live announce stream logger (ferret-original) |
-| `rnlink` | 🔲 | Raw bidirectional Link pipe (ferret-original) |
-| `rnbench` | 🔲 | Network throughput benchmark (ferret-original) |
-| `rnmon` | 🔲 | TUI network monitor (ferret-original, requires `tui` feature) |
-| `rnnamed` | 🔲 | Human-readable name service (ferret-original) |
-| `rnodeconf` | 🔲 | RNode hardware configuration (requires `serial` feature) |
+| `rnprobe` | ✅ | Network probe (ping-like RTT measurement) |
+| `rncp` | ✅ | File transfer over Links |
+| `rnx` | ✅ | Remote command execution |
+| `rnlog` | ✅ | Live announce stream logger (ferret-original) |
+| `rnlink` | ✅ | Raw bidirectional Link pipe (ferret-original) |
+| `rnbench` | ✅ | Network throughput benchmark (ferret-original) |
+| `rnmon` | ✅ | TUI network monitor (ferret-original, requires `tui` feature) |
+| `rnnamed` | ✅ | Human-readable name service (ferret-original) |
+| `rnodeconf` | ✅ | RNode hardware configuration (requires `serial` feature) |
 
 ### Library Modules
 
 | Layer | Module | Purpose |
 |-------|--------|---------|
-| 1 | `crypto` | X25519, Ed25519, AES-CBC, SHA-256/512, HMAC, HKDF, Fernet tokens |
+| 1 | `crypto` | X25519, Ed25519, AES-CBC, SHA-256/512, HMAC, HKDF, Fernet tokens, LXStamper PoW |
 | 2 | `identity` | Keypair management, identity store, ratchet store, announce validation |
 | 3 | `destination` | Addressing, hashing, encryption, announce building |
 | 3 | `packet` | Wire-format packing/unpacking, receipts, proofs |
@@ -164,6 +166,7 @@ Ferret is a single-crate Rust project. The library modules are layered, and the 
 | 7 | `reticulum` | Main process, config parser, RPC server, background jobs, logging |
 | 8 | `rpc_client` | RPC client for shared-instance control port queries |
 | 8 | `util/format` | Output formatting (pretty hex, sizes, speeds, timestamps) |
+| 8 | `names` | Human-readable name service (record, store, resolver) |
 
 ## Building from source
 
