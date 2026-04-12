@@ -1,4 +1,4 @@
-# Ferret
+# Ferret RNS
 
 A Rust implementation of the [Reticulum Network Stack](https://reticulum.network/).
 
