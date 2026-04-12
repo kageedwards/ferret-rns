@@ -14,6 +14,7 @@ pub mod discovery;
 pub mod resolver;
 pub mod interfaces;
 pub mod reticulum;
+pub mod rpc_client;
 
 pub use error::{FerretError, Result};
 
