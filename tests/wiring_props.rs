@@ -19,7 +19,7 @@
 // Feature: ferret-integration-wiring, Property 7: Announce rate suppression
 // **Validates: Requirements 8.1, 8.3**
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::{Read, Write};
 use std::net::TcpStream;
 use std::sync::atomic::AtomicBool;
@@ -28,14 +28,15 @@ use std::thread;
 use std::time::Duration;
 
 use proptest::prelude::*;
-use serde::{Deserialize, Serialize};
+use serde_pickle::value::{HashableValue, Value};
 
+use ferret_rns::crypto::hmac::hmac_sha256;
 use ferret_rns::interfaces::base::Interface;
 use ferret_rns::packet::packet::Packet;
 use ferret_rns::packet::proof::ProofDestination;
 use ferret_rns::reticulum::jobs::{persist_path_table, SerializedPathEntry};
 use ferret_rns::reticulum::rpc::RpcServer;
-use ferret_rns::transport::transport::{ActiveLink, PathEntry, PendingLink, TransportState};
+use ferret_rns::transport::transport::{LinkEntry, PathEntry, TransportState};
 use ferret_rns::transport::InterfaceHandle;
 use ferret_rns::types::interface::InterfaceMode;
 use ferret_rns::types::packet::{ContextFlag, HeaderType, PacketContext, PacketType};
@@ -104,48 +105,73 @@ fn random_blob_strategy() -> impl Strategy<Value = [u8; 10]> {
 }
 
 // ---------------------------------------------------------------------------
-// RPC wire types (matching src/reticulum/rpc.rs)
+// RPC pickle wire helpers (matching Python multiprocessing.connection protocol)
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Serialize, Deserialize)]
-struct RpcRequest {
-    #[serde(default)]
-    key: Vec<u8>,
-    #[serde(default)]
-    get: Option<String>,
-    #[serde(default)]
-    drop: Option<String>,
-    #[serde(default)]
-    max_hops: Option<u8>,
-    #[serde(default)]
-    destination_hash: Option<Vec<u8>>,
-}
+const CHALLENGE_PREFIX: &[u8] = b"#CHALLENGE#";
+const DIGEST_PREFIX: &[u8] = b"{sha256}";
+const WELCOME: &[u8] = b"#WELCOME#";
 
-#[derive(Debug, Serialize, Deserialize)]
-struct RpcResponse {
-    ok: bool,
-    #[serde(default)]
-    error: Option<String>,
-    #[serde(default)]
-    count: Option<u64>,
-    #[serde(default)]
-    entries: Option<Vec<Vec<u8>>>,
-}
-
-fn send_rpc_request(port: u16, req: &RpcRequest) -> RpcResponse {
-    let mut stream = TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();
-    let payload = rmp_serde::to_vec(req).unwrap();
-    let len = (payload.len() as u32).to_be_bytes();
-    stream.write_all(&len).unwrap();
-    stream.write_all(&payload).unwrap();
+/// Send a length-prefixed frame (4-byte big-endian i32 + payload).
+fn send_bytes(stream: &mut TcpStream, data: &[u8]) {
+    let len = data.len() as i32;
+    stream.write_all(&len.to_be_bytes()).unwrap();
+    stream.write_all(data).unwrap();
     stream.flush().unwrap();
+}
 
+/// Receive a length-prefixed frame.
+fn recv_bytes(stream: &mut TcpStream) -> Vec<u8> {
     let mut len_buf = [0u8; 4];
     stream.read_exact(&mut len_buf).unwrap();
-    let rlen = u32::from_be_bytes(len_buf) as usize;
-    let mut buf = vec![0u8; rlen];
+    let len = i32::from_be_bytes(len_buf);
+    assert!(len >= 0 && len <= 1_048_576, "frame length out of range");
+    let mut buf = vec![0u8; len as usize];
     stream.read_exact(&mut buf).unwrap();
-    rmp_serde::from_slice(&buf).unwrap()
+    buf
+}
+
+/// Perform the client side of the HMAC-SHA256 challenge-response handshake.
+fn client_authenticate(stream: &mut TcpStream, authkey: &[u8]) {
+    let challenge = recv_bytes(stream);
+    assert!(challenge.starts_with(CHALLENGE_PREFIX));
+    let message = &challenge[CHALLENGE_PREFIX.len()..];
+    let mac = hmac_sha256(authkey, message);
+    let mut response = Vec::with_capacity(DIGEST_PREFIX.len() + 32);
+    response.extend_from_slice(DIGEST_PREFIX);
+    response.extend_from_slice(&mac);
+    send_bytes(stream, &response);
+    let result = recv_bytes(stream);
+    assert_eq!(result, WELCOME, "HMAC authentication should succeed");
+}
+
+/// Build a pickle dict Value from key-value pairs.
+fn pickle_dict(entries: Vec<(&str, Value)>) -> Value {
+    let mut map = BTreeMap::new();
+    for (k, v) in entries {
+        map.insert(HashableValue::String(k.to_string()), v);
+    }
+    Value::Dict(map)
+}
+
+fn pickle_string(s: &str) -> Value { Value::String(s.to_string()) }
+fn pickle_none() -> Value { Value::None }
+fn pickle_bytes(b: &[u8]) -> Value { Value::Bytes(b.to_vec()) }
+
+/// Send a pickle command and receive a pickle response over an authenticated stream.
+fn rpc_call(stream: &mut TcpStream, command: &Value) -> Value {
+    let payload = serde_pickle::value_to_vec(command, serde_pickle::SerOptions::new()).unwrap();
+    send_bytes(stream, &payload);
+    let response_bytes = recv_bytes(stream);
+    serde_pickle::value_from_slice(&response_bytes, serde_pickle::DeOptions::new()).unwrap()
+}
+
+/// Connect, authenticate, send one pickle command, return the response.
+fn rpc_request(port: u16, key: &[u8], command: &Value) -> Value {
+    let mut stream = TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();
+    stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+    client_authenticate(&mut stream, key);
+    rpc_call(&mut stream, command)
 }
 
 fn start_rpc_server(transport: TransportState) -> (Arc<RpcServer>, u16, Vec<u8>) {
@@ -155,6 +181,24 @@ fn start_rpc_server(transport: TransportState) -> (Arc<RpcServer>, u16, Vec<u8>)
     let port = srv.local_port();
     thread::sleep(Duration::from_millis(50));
     (srv, port, key)
+}
+
+/// Extract bytes from a pickle Value.
+fn val_bytes(v: &Value) -> Option<&[u8]> {
+    match v { Value::Bytes(b) => Some(b.as_slice()), _ => None }
+}
+
+/// Extract i64 from a pickle Value.
+fn val_i64(v: &Value) -> Option<i64> {
+    match v { Value::I64(n) => Some(*n), _ => None }
+}
+
+/// Look up a key in a pickle dict Value.
+fn dict_get<'a>(dict: &'a Value, key: &str) -> Option<&'a Value> {
+    match dict {
+        Value::Dict(map) => map.get(&HashableValue::String(key.to_string())),
+        _ => None,
+    }
 }
 
 
@@ -349,38 +393,41 @@ proptest! {
         // Start RPC server with this transport
         let (srv, port, key) = start_rpc_server(ts);
 
-        // Query path_table
-        let req = RpcRequest {
-            key,
-            get: Some("path_table".into()),
-            drop: None,
-            max_hops: None,
-            destination_hash: None,
-        };
-        let resp = send_rpc_request(port, &req);
+        // Query path_table via pickle command
+        let cmd = pickle_dict(vec![
+            ("get", pickle_string("path_table")),
+            ("max_hops", pickle_none()),
+        ]);
+        let resp = rpc_request(port, &key, &cmd);
         srv.stop();
 
-        prop_assert!(resp.ok, "RPC response should be ok");
-        let rpc_entries = resp.entries.unwrap();
+        // Response is a pickle list of dicts
+        let rpc_entries = match &resp {
+            Value::List(v) => v,
+            other => {
+                prop_assert!(false, "expected List, got {:?}", other);
+                unreachable!()
+            }
+        };
         prop_assert_eq!(
             rpc_entries.len(),
             expected.len(),
             "RPC entry count should match transport state"
         );
 
-        // Decode each entry and verify dest_hash + hops
-        let mut rpc_map: HashMap<Vec<u8>, u8> = HashMap::new();
-        for entry_bytes in &rpc_entries {
-            let row: (Vec<u8>, u8, f64, f64, Vec<u8>) =
-                rmp_serde::from_slice(entry_bytes).unwrap();
-            rpc_map.insert(row.0, row.1);
+        // Decode each entry dict and verify dest_hash + hops
+        let mut rpc_map: HashMap<Vec<u8>, i64> = HashMap::new();
+        for entry in rpc_entries {
+            let hash = val_bytes(dict_get(entry, "hash").unwrap()).unwrap().to_vec();
+            let hops = val_i64(dict_get(entry, "hops").unwrap()).unwrap();
+            rpc_map.insert(hash, hops);
         }
 
         for (dest_hash, hops) in &expected {
             let rpc_hops = rpc_map.get(&dest_hash.to_vec());
             prop_assert_eq!(
                 rpc_hops,
-                Some(hops),
+                Some(&(*hops as i64)),
                 "hops mismatch for dest {:?}",
                 dest_hash
             );
@@ -389,13 +436,13 @@ proptest! {
 }
 
 // ---------------------------------------------------------------------------
-// Property 4: RPC link_count reflects pending + active links
+// Property 4: RPC link_count reflects link_table size
 // Feature: ferret-integration-wiring, Property 4: RPC link_count reflects pending + active links
 // **Validates: Requirements 4.5**
 //
-// For any combination of pending and active links registered in
-// TransportState, the RPC dispatch for `get link_count` SHALL return a
-// count equal to pending_links.len() + active_links.len().
+// For any number of link entries registered in TransportState's link_table,
+// the RPC dispatch for `get link_count` SHALL return a count equal to
+// link_table.len().
 // ---------------------------------------------------------------------------
 
 proptest! {
@@ -403,57 +450,45 @@ proptest! {
 
     #[test]
     fn rpc_link_count_reflects_pending_plus_active(
-        n_pending in 0usize..10,
-        n_active in 0usize..10,
+        n_links in 0usize..10,
     ) {
         let ts = TransportState::new();
 
         {
             let mut inner = ts.inner.write().unwrap();
-            for i in 0..n_pending {
+            for i in 0..n_links {
                 let mut link_id = [0u8; 16];
                 link_id[0] = i as u8;
-                link_id[1] = 0x01; // distinguish from active
-                inner.pending_links.push(PendingLink {
-                    link_id,
-                    destination_hash: [0u8; 16],
+                inner.link_table.insert(link_id, LinkEntry {
                     timestamp: 1000.0,
-                    link: None,
-                });
-            }
-            for i in 0..n_active {
-                let mut link_id = [0u8; 16];
-                link_id[0] = i as u8;
-                link_id[1] = 0x02; // distinguish from pending
-                inner.active_links.push(ActiveLink {
-                    link_id,
+                    next_hop: [0u8; 16],
+                    next_hop_interface: Arc::new(DummyInterface) as Arc<dyn InterfaceHandle>,
+                    remaining_hops: 3,
+                    receiving_interface: Arc::new(DummyInterface) as Arc<dyn InterfaceHandle>,
+                    taken_hops: 0,
                     destination_hash: [0u8; 16],
-                    timestamp: 1000.0,
-                    link: None,
+                    validated: false,
+                    proof_timeout: 0.0,
                 });
             }
         }
 
-        let expected_count = (n_pending + n_active) as u64;
+        let expected_count = n_links as i64;
 
         let (srv, port, key) = start_rpc_server(ts);
 
-        let req = RpcRequest {
-            key,
-            get: Some("link_count".into()),
-            drop: None,
-            max_hops: None,
-            destination_hash: None,
-        };
-        let resp = send_rpc_request(port, &req);
+        let cmd = pickle_dict(vec![("get", pickle_string("link_count"))]);
+        let resp = rpc_request(port, &key, &cmd);
         srv.stop();
 
-        prop_assert!(resp.ok, "RPC response should be ok");
-        prop_assert_eq!(
-            resp.count,
-            Some(expected_count),
-            "link_count should equal pending + active"
-        );
+        match resp {
+            Value::I64(n) => prop_assert_eq!(
+                n,
+                expected_count,
+                "link_count should equal link_table.len()"
+            ),
+            other => prop_assert!(false, "expected I64, got {:?}", other),
+        }
     }
 }
 
@@ -495,17 +530,14 @@ proptest! {
 
         let (srv, port, key) = start_rpc_server(ts.clone());
 
-        let req = RpcRequest {
-            key,
-            get: None,
-            drop: Some("path".into()),
-            max_hops: None,
-            destination_hash: Some(dest_hash.to_vec()),
-        };
-        let resp = send_rpc_request(port, &req);
+        let cmd = pickle_dict(vec![
+            ("drop", pickle_string("path")),
+            ("destination_hash", pickle_bytes(&dest_hash)),
+        ]);
+        let resp = rpc_request(port, &key, &cmd);
         srv.stop();
 
-        prop_assert!(resp.ok, "RPC drop response should be ok");
+        prop_assert_eq!(resp, Value::Bool(true), "RPC drop response should be True");
         prop_assert!(
             !ts.has_path(&dest_hash).unwrap(),
             "has_path should return false after drop"
