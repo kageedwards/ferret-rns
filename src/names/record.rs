@@ -82,14 +82,20 @@ impl NameRecord {
         hash[..16] == self.identity_hash[..]
     }
 
-    /// Compute the bytes that are signed: name ++ dest_hash ++ identity_hash ++ public_key ++ timestamp ++ stamp
-    pub fn signed_data(&self) -> Vec<u8> {
+    /// Compute the bytes used for stamp generation/verification (without stamp).
+    pub fn stamp_data(&self) -> Vec<u8> {
         let mut data = Vec::new();
         data.extend_from_slice(self.name.as_bytes());
         data.extend_from_slice(&self.dest_hash);
         data.extend_from_slice(&self.identity_hash);
         data.extend_from_slice(&self.public_key);
         data.extend_from_slice(&self.timestamp.to_be_bytes());
+        data
+    }
+
+    /// Compute the bytes that are signed: name ++ dest_hash ++ identity_hash ++ public_key ++ timestamp ++ stamp
+    pub fn signed_data(&self) -> Vec<u8> {
+        let mut data = self.stamp_data();
         data.extend_from_slice(&self.stamp);
         data
     }

@@ -82,7 +82,7 @@ impl NameResolver {
 
         // 4. Verify stamp difficulty
         if !verify_stamp(
-            &record.signed_data(),
+            &record.stamp_data(),
             &record.stamp,
             self.config.stamp_difficulty,
         ) {

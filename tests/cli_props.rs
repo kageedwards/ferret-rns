@@ -334,3 +334,364 @@ mod property_4 {
         }
     }
 }
+
+// =========================================================================
+// Name service test helpers
+// =========================================================================
+
+mod name_helpers {
+    use ferret_rns::identity::Identity;
+    use ferret_rns::names::record::NameRecord;
+    use ferret_rns::names::stamp::generate_stamp;
+
+    /// Create a valid name record with a low-difficulty stamp for testing.
+    pub fn make_record(label: &str, identity: &Identity, timestamp: f64) -> NameRecord {
+        let id_hash = identity.hash().unwrap();
+        let id_hex: String = id_hash.iter().map(|b| format!("{:02x}", b)).collect();
+        let suffix = &id_hex[28..32];
+        let name = format!("{}.{}", label, suffix);
+        let dest_hash = vec![0u8; 16]; // dummy dest
+
+        let pub_key = identity.get_public_key().unwrap();
+
+        let mut record = NameRecord {
+            name: name.clone(),
+            dest_hash: dest_hash.clone(),
+            identity_hash: id_hash.to_vec(),
+            public_key: pub_key.to_vec(),
+            timestamp,
+            stamp: vec![],
+            signature: vec![0u8; 64],
+        };
+
+        // Generate stamp with difficulty 1 (fast for tests)
+        let stamp = generate_stamp(&record.stamp_data(), 1);
+        record.stamp = stamp;
+
+        // Re-sign with updated stamp
+        let sig = identity.sign(&record.signed_data()).unwrap();
+        record.signature = sig.to_vec();
+        record
+    }
+
+    pub fn suffix_of(identity: &Identity) -> String {
+        let id_hash = identity.hash().unwrap();
+        let id_hex: String = id_hash.iter().map(|b| format!("{:02x}", b)).collect();
+        id_hex[28..32].to_string()
+    }
+}
+
+// =========================================================================
+// Feature: ferret-cli-utilities, Property 5: Name Record Validation
+// =========================================================================
+mod property_5 {
+    use super::*;
+    use ferret_rns::identity::Identity;
+    use super::name_helpers::make_record;
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(50))]
+
+        #[test]
+        fn valid_record_accepted(_seed in 0u64..1000) {
+            let identity = Identity::new();
+            let record = make_record("test", &identity, 1000.0);
+            prop_assert!(record.validate_format());
+            prop_assert!(record.validate_suffix());
+            prop_assert!(record.validate_identity_hash());
+            prop_assert!(record.validate_signature());
+        }
+    }
+
+    #[test]
+    fn bad_suffix_rejected() {
+        let identity = Identity::new();
+        let mut record = make_record("test", &identity, 1000.0);
+        // Corrupt the name suffix
+        record.name = "test.0000".to_string();
+        assert!(!record.validate_suffix());
+    }
+
+    #[test]
+    fn bad_signature_rejected() {
+        let identity = Identity::new();
+        let mut record = make_record("test", &identity, 1000.0);
+        record.signature[0] ^= 0xFF;
+        assert!(!record.validate_signature());
+    }
+}
+
+// =========================================================================
+// Feature: ferret-cli-utilities, Property 6: Name Store Persistence and Lookup
+// =========================================================================
+mod property_6 {
+    use super::*;
+    use ferret_rns::identity::Identity;
+    use ferret_rns::names::store::NameStore;
+    use super::name_helpers::make_record;
+
+    proptest! {
+        #![proptest_config(ProptestConfig::with_cases(50))]
+
+        #[test]
+        fn store_lookup_roundtrip(count in 1usize..=10) {
+            let mut store = NameStore::new();
+            let identity = Identity::new();
+            let mut names = Vec::new();
+
+            for i in 0..count {
+                let label = format!("name{}", i);
+                let record = make_record(&label, &identity, 1000.0 + i as f64);
+                names.push(record.name.clone());
+                store.store(record);
+            }
+
+            for name in &names {
+                let found = store.lookup(name);
+                prop_assert!(found.is_some(), "stored record must be found");
+                prop_assert_eq!(&found.unwrap().name, name);
+            }
+
+            prop_assert!(store.lookup("nonexistent.0000").is_none());
+        }
+    }
+}
+
+// =========================================================================
+// Feature: ferret-cli-utilities, Property 7: Name Record Update Semantics
+// =========================================================================
+mod property_7 {
+    use super::*;
+    use ferret_rns::identity::Identity;
+    use ferret_rns::names::store::NameStore;
+    use super::name_helpers::make_record;
+
+    #[test]
+    fn newer_replaces_older() {
+        let mut store = NameStore::new();
+        let identity = Identity::new();
+        let old = make_record("test", &identity, 1000.0);
+        let new = make_record("test", &identity, 2000.0);
+        store.store(old);
+        assert!(store.store(new));
+        assert_eq!(store.lookup(&format!("test.{}", super::name_helpers::suffix_of(&identity))).unwrap().timestamp, 2000.0);
+    }
+
+    #[test]
+    fn older_does_not_replace() {
+        let mut store = NameStore::new();
+        let identity = Identity::new();
+        let new = make_record("test", &identity, 2000.0);
+        let old = make_record("test", &identity, 1000.0);
+        store.store(new);
+        assert!(!store.store(old));
+        assert_eq!(store.lookup(&format!("test.{}", super::name_helpers::suffix_of(&identity))).unwrap().timestamp, 2000.0);
+    }
+}
+
+// =========================================================================
+// Feature: ferret-cli-utilities, Property 8: Max Registrations Per Suffix
+// =========================================================================
+mod property_8 {
+    use super::*;
+    use ferret_rns::identity::Identity;
+    use ferret_rns::names::resolver::{NameResolver, ResolverConfig};
+    use ferret_rns::names::store::NameStore;
+    use super::name_helpers::make_record;
+
+    #[test]
+    fn max_per_suffix_enforced() {
+        let config = ResolverConfig {
+            stamp_difficulty: 1,
+            max_per_suffix: 3,
+            rate_limit_seconds: 0.0, // disable rate limit for this test
+            ..Default::default()
+        };
+        let mut resolver = NameResolver::new(NameStore::new(), config);
+        let identity = Identity::new();
+
+        for i in 0..3 {
+            let record = make_record(&format!("name{}", i), &identity, 1000.0 + i as f64);
+            assert!(resolver.register(record).unwrap());
+        }
+
+        // 4th should be rejected
+        let record = make_record("name3", &identity, 1003.0);
+        let result = resolver.register(record);
+        assert!(result.is_err() || !result.unwrap());
+    }
+}
+
+// =========================================================================
+// Feature: ferret-cli-utilities, Property 9: Registration Rate Limit
+// =========================================================================
+mod property_9 {
+    use super::*;
+    use ferret_rns::identity::Identity;
+    use ferret_rns::names::resolver::{NameResolver, ResolverConfig};
+    use ferret_rns::names::store::NameStore;
+    use super::name_helpers::make_record;
+
+    #[test]
+    fn rate_limit_within_window() {
+        let config = ResolverConfig {
+            stamp_difficulty: 1,
+            max_per_suffix: 10,
+            rate_limit_seconds: 3600.0,
+            ..Default::default()
+        };
+        let mut resolver = NameResolver::new(NameStore::new(), config);
+        let identity = Identity::new();
+
+        let r1 = make_record("first", &identity, 1000.0);
+        assert!(resolver.register(r1).unwrap());
+
+        // Second within 1 hour should be rejected
+        let r2 = make_record("second", &identity, 1500.0);
+        assert!(resolver.register(r2).is_err());
+    }
+
+    #[test]
+    fn rate_limit_after_window() {
+        let config = ResolverConfig {
+            stamp_difficulty: 1,
+            max_per_suffix: 10,
+            rate_limit_seconds: 3600.0,
+            ..Default::default()
+        };
+        let mut resolver = NameResolver::new(NameStore::new(), config);
+        let identity = Identity::new();
+
+        let r1 = make_record("first", &identity, 1000.0);
+        assert!(resolver.register(r1).unwrap());
+
+        // Second after 1 hour should be accepted
+        let r2 = make_record("second", &identity, 5000.0);
+        assert!(resolver.register(r2).unwrap());
+    }
+}
+
+// =========================================================================
+// Feature: ferret-cli-utilities, Property 10: Record TTL Expiry
+// =========================================================================
+mod property_10 {
+    use super::*;
+    use ferret_rns::identity::Identity;
+    use ferret_rns::names::store::NameStore;
+    use super::name_helpers::{make_record, suffix_of};
+
+    #[test]
+    fn expired_record_not_returned() {
+        let mut store = NameStore::new();
+        let identity = Identity::new();
+        // Record from far in the past
+        let record = make_record("old", &identity, 1.0);
+        let name = record.name.clone();
+        store.store(record);
+
+        // With a 30-day TTL, a record from timestamp 1.0 is expired
+        assert!(store.lookup_with_ttl(&name, 30.0 * 86400.0).is_none());
+    }
+
+    #[test]
+    fn fresh_record_returned() {
+        let mut store = NameStore::new();
+        let identity = Identity::new();
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs_f64();
+        let record = make_record("fresh", &identity, now);
+        let name = record.name.clone();
+        store.store(record);
+
+        assert!(store.lookup_with_ttl(&name, 30.0 * 86400.0).is_some());
+        let _ = suffix_of; // suppress warning
+    }
+}
+
+// =========================================================================
+// Feature: ferret-cli-utilities, Property 11: Blackhole Rejection
+// =========================================================================
+mod property_11 {
+    use super::*;
+    use ferret_rns::identity::Identity;
+    use ferret_rns::names::resolver::{NameResolver, ResolverConfig};
+    use ferret_rns::names::store::NameStore;
+    use super::name_helpers::make_record;
+
+    #[test]
+    fn blackholed_identity_rejected() {
+        let config = ResolverConfig {
+            stamp_difficulty: 1,
+            rate_limit_seconds: 0.0,
+            ..Default::default()
+        };
+        let mut resolver = NameResolver::new(NameStore::new(), config);
+        let identity = Identity::new();
+        let id_hex: String = identity.hash().unwrap().iter().map(|b| format!("{:02x}", b)).collect();
+
+        resolver.blackhole_identity(&id_hex);
+
+        let record = make_record("blocked", &identity, 1000.0);
+        assert!(resolver.register(record).is_err());
+    }
+
+    #[test]
+    fn non_blackholed_accepted() {
+        let config = ResolverConfig {
+            stamp_difficulty: 1,
+            rate_limit_seconds: 0.0,
+            ..Default::default()
+        };
+        let mut resolver = NameResolver::new(NameStore::new(), config);
+        let identity = Identity::new();
+
+        let record = make_record("allowed", &identity, 1000.0);
+        assert!(resolver.register(record).unwrap());
+    }
+}
+
+// =========================================================================
+// Feature: ferret-cli-utilities, Property 12: Wildcard Query Correctness
+// =========================================================================
+mod property_12 {
+    use super::*;
+    use ferret_rns::identity::Identity;
+    use ferret_rns::names::store::NameStore;
+    use super::name_helpers::{make_record, suffix_of};
+
+    #[test]
+    fn wildcard_label_query() {
+        let mut store = NameStore::new();
+        let id1 = Identity::new();
+        let id2 = Identity::new();
+
+        let r1 = make_record("alice", &id1, 1000.0);
+        let r2 = make_record("alice", &id2, 1000.0);
+        let r3 = make_record("bob", &id1, 1001.0);
+        store.store(r1);
+        store.store(r2);
+        store.store(r3);
+
+        let results = store.query_wildcard("alice.*");
+        assert_eq!(results.len(), 2);
+        assert!(results.iter().all(|r| r.label() == "alice"));
+    }
+
+    #[test]
+    fn wildcard_suffix_query() {
+        let mut store = NameStore::new();
+        let identity = Identity::new();
+        let suffix = suffix_of(&identity);
+
+        let r1 = make_record("alice", &identity, 1000.0);
+        let r2 = make_record("bob", &identity, 1001.0);
+        store.store(r1);
+        store.store(r2);
+
+        let results = store.query_wildcard(&format!("*.{}", suffix));
+        assert_eq!(results.len(), 2);
+        assert!(results.iter().all(|r| r.suffix() == suffix));
+    }
+}
