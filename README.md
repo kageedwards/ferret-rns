@@ -24,7 +24,6 @@ Ferret is functional and interoperable with the Python reference stack. It has b
 - Announce validation, path table management, rate limiting
 - Packet forwarding between network interfaces and local clients
 - State persistence (path table, known destinations, transport identity)
-- IFAC (Interface Access Code) authentication
 - HDLC and KISS codec framing
 - Leveled logging (Critical through Extreme)
 
@@ -34,8 +33,9 @@ Ferret is functional and interoperable with the Python reference stack. It has b
 - Link establishment and channel communication
 - Resource transfers
 
-### May work
+### Should™ work
 
+- IFAC (Interface Access Code) authentication
 - QUIC transport interface (experimental, built with the `quic` feature flag — not yet tested against live peers)
 
 ## Quick start
