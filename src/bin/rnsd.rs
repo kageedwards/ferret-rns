@@ -14,7 +14,7 @@ const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Reticulum Network Stack Daemon
 #[derive(Parser)]
-#[command(name = "rnsd", version, about = "Reticulum Network Stack Daemon")]
+#[command(name = "rnsd", version, about = "Ferret - Reticulum Network Stack Daemon")]
 struct Cli {
     /// Path to alternative Reticulum config directory
     #[arg(short = 'c', long = "config")]
@@ -73,12 +73,12 @@ fn main() {
 
     if reticulum.is_connected_to_shared_instance {
         ferret_rns::log_warning!(
-            "Started rnsd version {} connected to another shared local instance, \
+            "Started Ferret rnsd version {} connected to another shared local instance, \
              this is probably NOT what you want!",
             VERSION
         );
     } else {
-        ferret_rns::log_notice!("Started rnsd version {}", VERSION);
+        ferret_rns::log_notice!("Started Ferret rnsd version {}", VERSION);
     }
 
     // Register signal handler — sets the shutdown flag on SIGINT/SIGTERM.
