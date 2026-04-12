@@ -300,13 +300,11 @@ impl Reticulum {
 
         // Interface synthesis from config
         log_debug!("Synthesizing interfaces");
-        if let Err(e) = synthesize_interfaces(
+        let _ = synthesize_interfaces(
             &parsed.interfaces,
             &reticulum.paths,
             &reticulum.transport_state,
-        ) {
-            log_warning!("Interface synthesis error: {}", e);
-        }
+        );
 
         // Load persisted path table (after interface synthesis so we can match interfaces)
         log_debug!("Loading path table");
