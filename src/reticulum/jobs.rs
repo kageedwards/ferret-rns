@@ -9,6 +9,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::identity::IdentityStore;
 use crate::transport::TransportState;
+use crate::{log_debug, log_warning};
 
 /// Resource cache lifetime: 24 hours.
 pub const RESOURCE_CACHE: u64 = 86_400;
@@ -65,7 +66,7 @@ pub fn persist_path_table(transport: &TransportState, storagepath: &Path) {
     })();
 
     if let Err(e) = result {
-        eprintln!("Warning: failed to persist path table: {}", e);
+        log_warning!("Failed to persist path table: {}", e);
     }
 }
 
@@ -103,10 +104,11 @@ pub fn run_jobs(
 
         // Persist transport state and identity store
         if last_persist.elapsed() >= Duration::from_secs(PERSIST_INTERVAL) {
+            log_debug!("Persisting path table and identity store");
             persist_path_table(&transport, &storagepath);
 
             if let Err(e) = identity_store.save(&storagepath.join("known_destinations")) {
-                eprintln!("Warning: failed to persist known destinations: {}", e);
+                log_warning!("Failed to persist known destinations: {}", e);
             }
 
             last_persist = Instant::now();
@@ -153,8 +155,8 @@ pub fn clean_cache_dir(dir: &Path, max_age_secs: u64) -> usize {
 
         if dominated {
             if let Err(e) = std::fs::remove_file(&path) {
-                eprintln!(
-                    "Warning: failed to remove cache file {}: {}",
+                log_warning!(
+                    "Failed to remove cache file {}: {}",
                     path.display(),
                     e
                 );

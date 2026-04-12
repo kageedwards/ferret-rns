@@ -12,6 +12,7 @@ use crate::transport::InterfaceHandle;
 use crate::transport::TransportState;
 use crate::types::InterfaceMode;
 use crate::Result;
+use crate::log_warning;
 
 // ---------------------------------------------------------------------------
 // Constants (matching Python reference)
@@ -451,7 +452,7 @@ impl Interface {
         if let (Some(t_guard), Some(h_guard)) = (transport_ref.as_ref(), handle_ref.as_ref()) {
             if let (Some(ref transport), Some(ref handle)) = (t_guard.as_ref(), h_guard.as_ref()) {
                 if let Err(e) = transport.inbound(&packet, handle) {
-                    eprintln!("[{}] transport inbound error: {}", self.name, e);
+                    log_warning!("[{}] transport inbound error: {}", self.name, e);
                 }
             }
         }

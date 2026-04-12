@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::Result;
 use crate::transport::TransportState;
+use crate::{log_debug, log_warning};
 
 // ---------------------------------------------------------------------------
 // Wire types
@@ -116,14 +117,14 @@ impl RpcServer {
             match listener.accept() {
                 Ok((stream, _addr)) => {
                     if let Err(e) = self.handle_connection(stream) {
-                        eprintln!("[RPC] connection error: {e}");
+                        log_debug!("RPC connection error: {e}");
                     }
                 }
                 Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => {
                     thread::sleep(Duration::from_millis(100));
                 }
                 Err(e) => {
-                    eprintln!("[RPC] accept error: {e}");
+                    log_warning!("RPC accept error: {e}");
                     thread::sleep(Duration::from_millis(100));
                 }
             }

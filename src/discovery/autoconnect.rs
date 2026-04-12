@@ -7,6 +7,7 @@ use crate::crypto::hashes::sha256;
 use crate::interfaces::tcp_client::TCPClientInterface;
 use crate::transport::{InterfaceHandle, TransportState};
 use crate::{FerretError, Result};
+use crate::log_warning;
 
 /// Monitor interval for checking interface status (seconds).
 pub const MONITOR_INTERVAL: u64 = 5;
@@ -114,8 +115,8 @@ impl AutoconnectManager {
                         connected.push(endpoint.clone());
                     }
                     Err(e) => {
-                        eprintln!(
-                            "Warning: autoconnect to {} failed: {}",
+                        log_warning!(
+                            "Autoconnect to {} failed: {}",
                             endpoint, e
                         );
                     }
@@ -175,8 +176,8 @@ impl AutoconnectManager {
                     return Ok(true);
                 }
                 Err(e) => {
-                    eprintln!(
-                        "Warning: autoconnect to {} failed: {}",
+                    log_warning!(
+                        "Autoconnect to {} failed: {}",
                         endpoint, e
                     );
                     return Ok(false);

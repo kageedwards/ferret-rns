@@ -11,6 +11,7 @@ use crate::link::request::RequestReceiptStatus;
 use crate::transport::TransportState;
 use crate::types::destination::{DestinationDirection, DestinationType};
 use crate::Result;
+use crate::log_warning;
 
 /// Initial wait before first update check (seconds).
 pub const INITIAL_WAIT: u64 = 20;
@@ -97,8 +98,8 @@ impl BlackholeUpdater {
         let remote_identity = match identity_store.recall_by_identity_hash(source_identity_hash) {
             Some(id) => id,
             None => {
-                eprintln!(
-                    "Warning: no known identity for blackhole source {}, skipping",
+                log_warning!(
+                    "No known identity for blackhole source {}, skipping",
                     hex_encode(source_identity_hash)
                 );
                 return Ok(());
@@ -114,8 +115,8 @@ impl BlackholeUpdater {
 
         // 3. Check if we have a path to the destination
         if !transport.has_path(&dest_hash)? {
-            eprintln!(
-                "Warning: no path to blackhole source {}, skipping",
+            log_warning!(
+                "No path to blackhole source {}, skipping",
                 hex_encode(source_identity_hash)
             );
             return Ok(());
@@ -135,8 +136,8 @@ impl BlackholeUpdater {
         let link = match Link::new(destination, transport, None, None) {
             Ok(l) => l,
             Err(e) => {
-                eprintln!(
-                    "Warning: failed to establish link for blackhole update from {}: {}",
+                log_warning!(
+                    "Failed to establish link for blackhole update from {}: {}",
                     hex_encode(source_identity_hash),
                     e
                 );
@@ -151,8 +152,8 @@ impl BlackholeUpdater {
             let status = match link.status() {
                 Ok(s) => s,
                 Err(e) => {
-                    eprintln!(
-                        "Warning: failed to check link status for blackhole update: {}",
+                    log_warning!(
+                        "Failed to check link status for blackhole update: {}",
                         e
                     );
                     return Ok(());
@@ -162,15 +163,15 @@ impl BlackholeUpdater {
                 break;
             }
             if status == crate::link::LinkStatus::Closed {
-                eprintln!(
-                    "Warning: link closed before establishment for blackhole source {}",
+                log_warning!(
+                    "Link closed before establishment for blackhole source {}",
                     hex_encode(source_identity_hash)
                 );
                 return Ok(());
             }
             if start.elapsed().as_secs_f64() > timeout_secs {
-                eprintln!(
-                    "Warning: link establishment timed out for blackhole source {}",
+                log_warning!(
+                    "Link establishment timed out for blackhole source {}",
                     hex_encode(source_identity_hash)
                 );
                 let _ = link.teardown(transport);
@@ -183,8 +184,8 @@ impl BlackholeUpdater {
         let receipt = match link.request("/list", None, transport, Some(timeout_secs)) {
             Ok(r) => r,
             Err(e) => {
-                eprintln!(
-                    "Warning: failed to send /list request for blackhole update from {}: {}",
+                log_warning!(
+                    "Failed to send /list request for blackhole update from {}: {}",
                     hex_encode(source_identity_hash),
                     e
                 );
@@ -198,8 +199,8 @@ impl BlackholeUpdater {
         let poll_start = std::time::Instant::now();
         let response_data: Option<Vec<u8>> = loop {
             if poll_start.elapsed().as_secs_f64() > timeout_secs {
-                eprintln!(
-                    "Warning: /list request timed out for blackhole source {}",
+                log_warning!(
+                    "/list request timed out for blackhole source {}",
                     hex_encode(source_identity_hash)
                 );
                 break None;
@@ -220,8 +221,8 @@ impl BlackholeUpdater {
             match concluded {
                 Some((RequestReceiptStatus::Ready, resp)) => break resp,
                 Some((RequestReceiptStatus::Failed, _)) => {
-                    eprintln!(
-                        "Warning: /list request failed for blackhole source {}",
+                    log_warning!(
+                        "/list request failed for blackhole source {}",
                         hex_encode(source_identity_hash)
                     );
                     break None;
@@ -242,16 +243,16 @@ impl BlackholeUpdater {
                     if let Err(e) =
                         Self::merge_and_persist(source_identity_hash, &hashes, blackholepath)
                     {
-                        eprintln!(
-                            "Warning: failed to persist blackhole list from {}: {}",
+                        log_warning!(
+                            "Failed to persist blackhole list from {}: {}",
                             hex_encode(source_identity_hash),
                             e
                         );
                     }
                 }
                 Err(e) => {
-                    eprintln!(
-                        "Warning: failed to parse blackhole list from {}: {}",
+                    log_warning!(
+                        "Failed to parse blackhole list from {}: {}",
                         hex_encode(source_identity_hash),
                         e
                     );

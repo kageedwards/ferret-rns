@@ -12,6 +12,7 @@ use crate::Result;
 
 use super::transport::{ReverseEntry, TransportState};
 use super::REVERSE_TIMEOUT;
+use crate::log_extreme;
 
 impl TransportState {
     /// Receive raw bytes from an interface, unpack, filter, and route.
@@ -83,6 +84,7 @@ impl TransportState {
             if let Some(local_iface) = inner.local_client_destinations.get(&packet.destination_hash) {
                 let local_iface = Arc::clone(local_iface);
                 drop(inner);
+                log_extreme!("Forwarding packet to local client for dest {:02x?}", &packet.destination_hash[..4]);
                 local_iface.transmit(&packet.raw)?;
                 return Ok(());
             }

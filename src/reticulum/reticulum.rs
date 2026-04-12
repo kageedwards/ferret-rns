@@ -15,6 +15,7 @@ use crate::reticulum::logging::LogDestination;
 use crate::transport::InterfaceHandle;
 use crate::transport::TransportState;
 use crate::{FerretError, Result};
+use crate::{log_debug, log_info, log_notice, log_verbose, log_warning};
 
 // ---------------------------------------------------------------------------
 // ReticulumPaths — resolved directory layout
@@ -213,12 +214,14 @@ impl Reticulum {
         let ret_sec = &parsed.reticulum;
 
         // Determine effective loglevel (CLI overrides config)
-        let _effective_loglevel = match user_config.loglevel {
+        let effective_loglevel = match user_config.loglevel {
             Some(l) => l.min(7),
             None => parsed.logging.loglevel.min(7),
         };
+        crate::reticulum::logging::set_log_level(effective_loglevel);
 
         // 5. Load or create transport identity
+        log_debug!("Loading transport identity");
         let identity_path = match ret_sec.network_identity {
             Some(ref custom_path) => custom_path.clone(),
             None => paths.storagepath.join("identity"),
@@ -226,6 +229,7 @@ impl Reticulum {
         let transport_identity = load_or_create_identity(&identity_path)?;
 
         // 6. Create and configure TransportState
+        log_debug!("Creating TransportState");
         let transport_state = TransportState::new();
         {
             let transport_identity_copy =
@@ -236,18 +240,20 @@ impl Reticulum {
         }
 
         // 7. Create IdentityStore and load from disk if file exists
+        log_debug!("Loading identity store");
         let identity_store = Arc::new(IdentityStore::new());
         let known_dest_path = paths.storagepath.join("known_destinations");
         if known_dest_path.exists() {
             if let Err(e) = identity_store.load(&known_dest_path) {
-                eprintln!("Warning: failed to load known destinations: {}", e);
+                log_warning!("Failed to load known destinations: {}", e);
             }
         }
 
         // 8. Create RatchetStore and clean expired ratchets
+        log_debug!("Loading ratchet store");
         let ratchet_store = Arc::new(RatchetStore::new(paths.storagepath.join("ratchets")));
         if let Err(e) = ratchet_store.clean_ratchets() {
-            eprintln!("Warning: failed to clean ratchets: {}", e);
+            log_warning!("Failed to clean ratchets: {}", e);
         }
 
         let mut reticulum = Reticulum {
@@ -281,19 +287,33 @@ impl Reticulum {
 
         // Shared instance management
         let transport_ref = reticulum.transport_state.clone();
+        log_debug!("Setting up shared instance");
         setup_shared_instance(&mut reticulum, &user_config, &transport_ref)?;
 
+        if reticulum.is_shared_instance {
+            log_info!("Reticulum initialized as shared instance");
+        } else if reticulum.is_connected_to_shared_instance {
+            log_info!("Reticulum connected to shared instance");
+        } else if reticulum.is_standalone_instance {
+            log_info!("Reticulum initialized as standalone");
+        }
+
         // Interface synthesis from config
-        synthesize_interfaces(
+        log_debug!("Synthesizing interfaces");
+        if let Err(e) = synthesize_interfaces(
             &parsed.interfaces,
             &reticulum.paths,
             &reticulum.transport_state,
-        )?;
+        ) {
+            log_warning!("Interface synthesis error: {}", e);
+        }
 
         // Load persisted path table (after interface synthesis so we can match interfaces)
+        log_debug!("Loading path table");
         load_path_table(&reticulum.transport_state, &reticulum.paths.storagepath);
 
         // Discovery subsystem startup
+        log_debug!("Starting discovery subsystem");
         if reticulum.discover_interfaces {
             let max_autoconnected = if ret_sec.autoconnect_discovered_interfaces > 0 {
                 Some(ret_sec.autoconnect_discovered_interfaces as usize)
@@ -310,7 +330,7 @@ impl Reticulum {
                     reticulum.interface_announcer = Some(announcer);
                 }
                 Err(e) => {
-                    eprintln!("Warning: failed to create InterfaceAnnouncer: {}", e);
+                    log_warning!("Failed to create InterfaceAnnouncer: {}", e);
                 }
             }
 
@@ -328,6 +348,7 @@ impl Reticulum {
         }
 
         // RPC server (shared instance only)
+        log_debug!("Starting RPC server");
         if reticulum.is_shared_instance {
             let rpc_key = reticulum.rpc_key.clone().unwrap_or_else(|| {
                 use sha2::{Sha256, Digest};
@@ -342,7 +363,7 @@ impl Reticulum {
             match crate::reticulum::rpc::RpcServer::start(port, rpc_key, shutdown, transport_for_rpc) {
                 Ok(_server) => { /* server runs in background thread */ }
                 Err(e) => {
-                    eprintln!("Warning: failed to start RPC server: {}", e);
+                    log_warning!("Failed to start RPC server: {}", e);
                 }
             }
         }
@@ -415,11 +436,11 @@ impl Reticulum {
             Ok(inner) => {
                 let count = inner.interfaces.len();
                 if count > 0 {
-                    eprintln!("Detaching {} registered interface(s)", count);
+                    log_info!("Detaching {} registered interface(s)", count);
                 }
             }
             Err(e) => {
-                eprintln!("Warning: failed to read transport state during shutdown: {}", e);
+                log_warning!("Failed to read transport state during shutdown: {}", e);
             }
         }
 
@@ -427,10 +448,10 @@ impl Reticulum {
         // The shutdown flag already signals background threads to stop;
         // these flags are checked by the discovery polling loops.
         if self.interface_announcer.is_some() {
-            eprintln!("Stopping InterfaceAnnouncer");
+            log_debug!("Stopping InterfaceAnnouncer");
         }
         if self.autoconnect_manager.is_some() {
-            eprintln!("Stopping AutoconnectManager");
+            log_debug!("Stopping AutoconnectManager");
         }
 
         // Persist transport state (path table)
@@ -443,7 +464,7 @@ impl Reticulum {
         if let Err(e) = self.identity_store.save(
             &self.paths.storagepath.join("known_destinations"),
         ) {
-            eprintln!("Warning: failed to persist known destinations on exit: {}", e);
+            log_warning!("Failed to persist known destinations on exit: {}", e);
         }
     }
 }
@@ -483,8 +504,8 @@ fn load_path_table(transport: &TransportState, storagepath: &Path) {
             None => {
                 // No interfaces registered yet — skip loading
                 if !entries.is_empty() {
-                    eprintln!(
-                        "Warning: skipping path table load ({} entries) — no interfaces registered",
+                    log_warning!(
+                        "Skipping path table load ({} entries) — no interfaces registered",
                         entries.len()
                     );
                 }
@@ -510,14 +531,14 @@ fn load_path_table(transport: &TransportState, storagepath: &Path) {
         }
 
         if loaded > 0 {
-            eprintln!("Loaded {} path table entries from disk", loaded);
+            log_verbose!("Loaded {} path table entries from disk", loaded);
         }
 
         Ok(())
     })();
 
     if let Err(e) = result {
-        eprintln!("Warning: failed to load path table: {}", e);
+        log_warning!("Failed to load path table: {}", e);
     }
 }
 
@@ -670,6 +691,7 @@ pub fn synthesize_interfaces(
         }
 
         let name = iface_def.name.clone();
+        log_debug!("Starting interface: {} ({})", name, iface_def.interface_type);
         let params = &iface_def.params;
         let result: Result<()> = match iface_def.interface_type.as_str() {
             "AutoInterface" => {
@@ -743,7 +765,7 @@ pub fn synthesize_interfaces(
                 let command = match get_str(params, "command") {
                     Some(c) => c,
                     None => {
-                        eprintln!("Warning: {}: PipeInterface requires 'command' param, skipping", name);
+                    log_warning!("{}: PipeInterface requires 'command' param, skipping", name);
                         continue;
                     }
                 };
@@ -786,7 +808,7 @@ pub fn synthesize_interfaces(
                 let port_path = match get_str(params, "port") {
                     Some(p) => p,
                     None => {
-                        eprintln!("Warning: {}: SerialInterface requires 'port' param, skipping", name);
+                        log_warning!("{}: SerialInterface requires 'port' param, skipping", name);
                         continue;
                     }
                 };
@@ -818,7 +840,7 @@ pub fn synthesize_interfaces(
                 let port_path = match get_str(params, "port") {
                     Some(p) => p,
                     None => {
-                        eprintln!("Warning: {}: KISSInterface requires 'port' param, skipping", name);
+                        log_warning!("{}: KISSInterface requires 'port' param, skipping", name);
                         continue;
                     }
                 };
@@ -845,7 +867,7 @@ pub fn synthesize_interfaces(
                 let port_path = match get_str(params, "port") {
                     Some(p) => p,
                     None => {
-                        eprintln!("Warning: {}: RNodeInterface requires 'port' param, skipping", name);
+                        log_warning!("{}: RNodeInterface requires 'port' param, skipping", name);
                         continue;
                     }
                 };
@@ -869,7 +891,7 @@ pub fn synthesize_interfaces(
                 let port_path = match get_str(params, "port") {
                     Some(p) => p,
                     None => {
-                        eprintln!("Warning: {}: WeaveInterface requires 'port' param, skipping", name);
+                        log_warning!("{}: WeaveInterface requires 'port' param, skipping", name);
                         continue;
                     }
                 };
@@ -882,7 +904,7 @@ pub fn synthesize_interfaces(
             }
             #[cfg(not(feature = "serial"))]
             "SerialInterface" | "KISSInterface" | "RNodeInterface" | "WeaveInterface" => {
-                eprintln!("Warning: {} type '{}' — serial feature not compiled in, skipping",
+                log_warning!("{} type '{}' — serial feature not compiled in, skipping",
                     name, iface_def.interface_type);
                 Ok(())
             }
@@ -914,17 +936,17 @@ pub fn synthesize_interfaces(
             }
             #[cfg(not(feature = "backbone"))]
             "BackboneInterface" => {
-                eprintln!("Warning: {} type 'BackboneInterface' — backbone feature not compiled in, skipping", name);
+                log_warning!("{} type 'BackboneInterface' — backbone feature not compiled in, skipping", name);
                 Ok(())
             }
             unknown => {
-                eprintln!("Warning: {}: unknown interface type '{}', skipping", name, unknown);
+                log_warning!("{}: unknown interface type '{}', skipping", name, unknown);
                 Ok(())
             }
         };
 
         if let Err(e) = result {
-            eprintln!("Warning: failed to start interface '{}', skipping: {}", iface_def.name, e);
+            log_notice!("Interface '{}' failed, skipping: {}", iface_def.name, e);
         }
     }
 

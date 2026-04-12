@@ -1,10 +1,37 @@
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Maximum log file size before rotation (5 MB).
 pub const LOG_MAXSIZE: u64 = 5_242_880;
+
+// ---------------------------------------------------------------------------
+// Global log level (default 4 = Info)
+// ---------------------------------------------------------------------------
+
+static LOG_LEVEL: AtomicU8 = AtomicU8::new(4);
+
+/// Set the global log level (0–7). Values > 7 are clamped to 7.
+pub fn set_log_level(level: u8) {
+    LOG_LEVEL.store(level.min(7), Ordering::Relaxed);
+}
+
+/// Get the current global log level.
+pub fn get_log_level() -> u8 {
+    LOG_LEVEL.load(Ordering::Relaxed)
+}
+
+/// Log a message at the given level. If the level exceeds the global
+/// threshold the message is silently dropped. Otherwise it is formatted
+/// via `format_log_entry()` and written to stderr.
+pub fn log(level: LogLevel, message: &str) {
+    if (level as u8) <= LOG_LEVEL.load(Ordering::Relaxed) {
+        let entry = format_log_entry(&level, message);
+        eprintln!("{}", entry);
+    }
+}
 
 /// Log severity levels matching the Python reference (0–7).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]

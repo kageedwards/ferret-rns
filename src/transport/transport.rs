@@ -12,6 +12,7 @@ use crate::packet::receipt::PacketReceipt;
 use crate::transport::hashlist::PacketHashlist;
 use crate::transport::InterfaceHandle;
 use crate::{FerretError, Result};
+use crate::log_warning;
 
 // ---------------------------------------------------------------------------
 // Table entry structs
@@ -292,7 +293,7 @@ impl TransportState {
                 .filter_map(|al| al.link.clone())
                 .collect(),
             Err(e) => {
-                eprintln!("Warning: failed to read transport for active link checks: {e}");
+                log_warning!("Failed to read transport for active link checks: {e}");
                 return;
             }
         };
@@ -311,13 +312,13 @@ impl TransportState {
                     }
                 }
                 Err(e) => {
-                    eprintln!("Warning: failed to lock link for request timeout check: {e}");
+                    log_warning!("Failed to lock link for request timeout check: {e}");
                 }
             }
 
             // Check stale
             if let Err(e) = link.check_stale() {
-                eprintln!("Warning: failed to check link stale: {e}");
+                log_warning!("Failed to check link stale: {e}");
             }
         }
 
@@ -329,14 +330,14 @@ impl TransportState {
                 .filter_map(|pl| pl.link.clone())
                 .collect(),
             Err(e) => {
-                eprintln!("Warning: failed to read transport for pending link checks: {e}");
+                log_warning!("Failed to read transport for pending link checks: {e}");
                 return;
             }
         };
 
         for link in &pending_links {
             if let Err(e) = link.check_establishment_timeout() {
-                eprintln!("Warning: failed to check link establishment timeout: {e}");
+                log_warning!("Failed to check link establishment timeout: {e}");
             }
         }
     }
