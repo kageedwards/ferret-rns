@@ -10,6 +10,7 @@ use crate::types::interface::InterfaceMode;
 use crate::types::packet::{HeaderType, PacketType};
 use crate::types::transport::TransportType;
 use crate::Result;
+use crate::log_extreme;
 
 use super::transport::TransportState;
 
@@ -19,6 +20,14 @@ impl TransportState {
     /// Returns `true` if the packet was transmitted on at least one interface.
     pub fn outbound(&self, packet: &mut Packet) -> Result<bool> {
         let mut sent = false;
+
+        log_extreme!(
+            "Outbound: type={:?} dest={:02x}{:02x}{:02x}{:02x}.. ({} bytes)",
+            packet.packet_type,
+            packet.destination_hash[0], packet.destination_hash[1],
+            packet.destination_hash[2], packet.destination_hash[3],
+            packet.raw.len(),
+        );
 
         // For non-ANNOUNCE, non-PLAIN, non-GROUP packets: check path table
         let should_check_path = packet.packet_type != PacketType::Announce

@@ -13,6 +13,7 @@ use crate::Result;
 use super::transport::{ReverseEntry, TransportState};
 use super::REVERSE_TIMEOUT;
 use crate::log_extreme;
+use crate::{log_debug, log_verbose, log_warning};
 
 impl TransportState {
     /// Receive raw bytes from an interface, unpack, filter, and route.
@@ -38,13 +39,27 @@ impl TransportState {
     ) -> Result<()> {
         // Step 1: Create packet from raw bytes, unpack, increment hops
         let mut packet = Packet::from_raw(raw.to_vec());
-        packet.unpack()?;
+        if let Err(e) = packet.unpack() {
+            log_debug!("Inbound packet unpack failed ({} bytes): {}", raw.len(), e);
+            return Ok(());
+        }
         packet.hops = packet.hops.saturating_add(1);
 
         // Update the hops byte in raw as well
         if packet.raw.len() > 1 {
             packet.raw[1] = packet.hops;
         }
+
+        log_extreme!(
+            "Inbound: type={:?} dest={:02x}{:02x}{:02x}{:02x}.. hops={} ctx={:?} from_iface={} ({} bytes)",
+            packet.packet_type,
+            packet.destination_hash[0], packet.destination_hash[1],
+            packet.destination_hash[2], packet.destination_hash[3],
+            packet.hops,
+            packet.context,
+            interface.name(),
+            raw.len(),
+        );
 
         // Step 1b: Local client routing — track source destinations from
         // local client interfaces so we can route replies back to them.
@@ -60,6 +75,12 @@ impl TransportState {
 
         // Step 2: Apply packet_filter
         if !self.packet_filter(&packet)? {
+            log_extreme!(
+                "Inbound: packet filtered (dup/rule) dest={:02x}{:02x}{:02x}{:02x}.. type={:?}",
+                packet.destination_hash[0], packet.destination_hash[1],
+                packet.destination_hash[2], packet.destination_hash[3],
+                packet.packet_type,
+            );
             return Ok(());
         }
 
@@ -112,19 +133,43 @@ impl TransportState {
 
         // Step 6: Announce handling
         if packet.packet_type == PacketType::Announce {
+            log_verbose!(
+                "Processing announce for dest {:02x}{:02x}{:02x}{:02x}.. hops={}",
+                packet.destination_hash[0], packet.destination_hash[1],
+                packet.destination_hash[2], packet.destination_hash[3],
+                packet.hops,
+            );
             self.process_announce(&mut packet, interface, identity_store, ratchet_store)?;
             return Ok(());
         }
 
         // Step 7: Local delivery
         if self.deliver_local(&mut packet)? {
+            log_verbose!(
+                "Delivered locally: dest {:02x}{:02x}{:02x}{:02x}.. type={:?}",
+                packet.destination_hash[0], packet.destination_hash[1],
+                packet.destination_hash[2], packet.destination_hash[3],
+                packet.packet_type,
+            );
             return Ok(());
         }
 
         // Step 8: Proof routing
         if packet.packet_type == PacketType::Proof {
+            log_extreme!(
+                "Routing proof for dest {:02x}{:02x}{:02x}{:02x}..",
+                packet.destination_hash[0], packet.destination_hash[1],
+                packet.destination_hash[2], packet.destination_hash[3],
+            );
             self.route_proof(&packet, interface)?;
         }
+
+        log_extreme!(
+            "Inbound: no route for dest {:02x}{:02x}{:02x}{:02x}.. type={:?}",
+            packet.destination_hash[0], packet.destination_hash[1],
+            packet.destination_hash[2], packet.destination_hash[3],
+            packet.packet_type,
+        );
 
         Ok(())
     }

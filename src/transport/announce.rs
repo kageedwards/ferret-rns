@@ -9,6 +9,7 @@ use crate::transport::InterfaceHandle;
 use crate::types::interface::InterfaceMode;
 use crate::types::packet::ContextFlag;
 use crate::Result;
+use crate::{log_debug, log_verbose, log_warning};
 
 use super::transport::{AnnounceEntry, PathEntry, TransportState};
 use super::{
@@ -40,13 +41,30 @@ impl TransportState {
         // Step 1: Validate signature only first
         let packet_hash = packet.get_hash();
         if !validate_announce(&announce, identity_store, ratchet_store, true, &packet_hash)? {
+            log_debug!(
+                "Announce signature invalid for dest {:02x}{:02x}{:02x}{:02x}..",
+                packet.destination_hash[0], packet.destination_hash[1],
+                packet.destination_hash[2], packet.destination_hash[3],
+            );
             return Ok(());
         }
 
         // Step 2: Full validation (hash check, store identity, store ratchet)
         if !validate_announce(&announce, identity_store, ratchet_store, false, &packet_hash)? {
+            log_debug!(
+                "Announce full validation failed for dest {:02x}{:02x}{:02x}{:02x}..",
+                packet.destination_hash[0], packet.destination_hash[1],
+                packet.destination_hash[2], packet.destination_hash[3],
+            );
             return Ok(());
         }
+
+        log_verbose!(
+            "Announce validated for dest {:02x}{:02x}{:02x}{:02x}.. hops={}",
+            packet.destination_hash[0], packet.destination_hash[1],
+            packet.destination_hash[2], packet.destination_hash[3],
+            packet.hops,
+        );
 
         // Determine received_from
         let received_from = packet
