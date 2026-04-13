@@ -6,7 +6,7 @@ A Rust implementation of the [Reticulum Network Stack](https://reticulum.network
   <img src="assets/ferret.jpg" alt="Ferret" width="100%">
 </p>
 
-Ferret is a drop-in replacement for the Python `rnsd` daemon and a native Rust library for building applications on Reticulum. It ships the same CLI utilities as the Python reference — `rnsd`, `rnstatus`, `rnpath`, `rnid`, and more — plus ferret-original tools like `rnmon`, `rnnamed`, `rnlog`, `rnlink`, and `rnbench`. Python RNS applications (NomadNet, MeshChat, LXMF, Sideband) can connect to ferret's shared instance without modification.
+Ferret provides an `rnsd` daemon and is a native Rust library for building applications on Reticulum. It ships the same CLI utilities as the Python reference implementation — `rnsd`, `rnstatus`, `rnpath`, `rnid`, etc. — plus some additional utilities like `rnmon`, `rnnamed`, `rnlog`, `rnlink`, and `rnbench`.
 
 ## Status
 
@@ -78,7 +78,7 @@ cargo build --release
 ./target/release/rnid -i ~/.reticulum/my_identity -s document.txt
 ```
 
-Ferret reads the same `~/.reticulum/config` file as the Python reference. If no config exists, it creates a default one.
+Ferret reads the Reticulum config from `~/.reticulum/config`. If no config exists, it creates a default one.
 
 ## Using with NomadNet
 
