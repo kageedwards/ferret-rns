@@ -18,16 +18,15 @@ Ferret is functional and interoperable with the Python reference stack. It has b
 
 ### What works
 
+- Interfaces: TCP client/server, UDP, Auto, Serial, Backbone
 - Shared instance server (local TCP on port 37428)
-- RPC server (Python `multiprocessing.connection` protocol on port 37429)
-- All interface types: TCP client/server, UDP, Auto, I2P, Pipe, Serial, KISS, RNode, Weave, Backbone
+- Instance control port
 - Announce validation, path table management, rate limiting
 - Packet forwarding between network interfaces and local clients
 - State persistence (path table, known destinations, transport identity)
 - HDLC and KISS codec framing
-- Leveled logging (Critical through Extreme)
-- CLI utilities: `rnsd`, `rnstatus`, `rnpath`, `rnid`, `rnprobe`, `rncp`, `rnx`, `rnlog`, `rnlink`, `rnbench`, `rnmon`, `rnnamed`, `rnodeconf`
-- Name service library with PoW anti-spam, record validation, persistent store
+- Leveled logging
+- CLI utilities: `rnsd`, `rnstatus`
 
 ### What's next
 
@@ -36,9 +35,11 @@ Ferret is functional and interoperable with the Python reference stack. It has b
 
 ### Should™ work
 
-- LXStamper-compatible proof-of-work stamps (discovery announcer/handler use the same HKDF workblock expansion + leading-zero-bits algorithm as the Python LXMF LXStamper, but not yet validated against live peers exchanging discovery announces)
+- Interfaces: I2P, Pipe, KISS, RNode, Weave, QUIC (experimental)
+- LXStamper-compatible proof-of-work stamps (not yet validated against live peers exchanging discovery announces)
 - IFAC (Interface Access Code) authentication
-- QUIC transport interface (experimental, built with the `quic` feature flag — not yet tested against live peers)
+- CLI utilities: `rnpath`, `rnid`, `rnprobe`, `rncp`, `rnx`, `rnlog`, `rnlink`, `rnbench`, `rnmon`, `rnnamed`, `rnodeconf`
+- Name service library with proof-of-work stamp cost, record validation, persistent store (no limits implemented yet)
 
 ## Quick start
 
