@@ -3,7 +3,6 @@
 //! Configures RNode LoRa transceivers via KISS protocol over serial.
 //! Requires the `serial` feature.
 
-use std::path::PathBuf;
 use std::process;
 
 use clap::Parser;

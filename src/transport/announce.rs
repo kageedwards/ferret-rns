@@ -9,7 +9,7 @@ use crate::transport::InterfaceHandle;
 use crate::types::interface::InterfaceMode;
 use crate::types::packet::ContextFlag;
 use crate::Result;
-use crate::{log_debug, log_verbose, log_warning};
+use crate::{log_debug, log_verbose};
 
 use super::transport::{AnnounceEntry, PathEntry, TransportState};
 use super::{
