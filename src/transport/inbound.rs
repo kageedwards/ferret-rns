@@ -352,8 +352,24 @@ impl TransportState {
     ) -> Result<()> {
         let now = now_f64();
 
-        // LRPROOF context: forward via link_table
+        // LRPROOF context: check local pending links first, then forward via link_table
         if packet.context == PacketContext::LrProof {
+            let matching_link = {
+                let inner = self.read()?;
+                inner.pending_links.iter().find_map(|pl| {
+                    if pl.link_id == packet.destination_hash {
+                        pl.link.clone()
+                    } else {
+                        None
+                    }
+                })
+            };
+
+            if let Some(link) = matching_link {
+                link.validate_proof(packet, self)?;
+                return Ok(());
+            }
+
             self.forward_link_packet(packet, _receiving_interface)?;
             return Ok(());
         }
