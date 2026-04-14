@@ -35,9 +35,7 @@ impl TransportState {
         }
 
         // Ensure cache directory exists
-        if !cache_dir.exists() {
-            std::fs::create_dir_all(&cache_dir)?;
-        }
+        let _ = std::fs::create_dir_all(&cache_dir);
 
         let iface_hash: Vec<u8> = interface
             .map(|i| i.interface_hash().to_vec())
@@ -68,7 +66,11 @@ impl TransportState {
             return Ok(None);
         }
 
-        let data = std::fs::read(&file_path)?;
+        let data = match std::fs::read(&file_path) {
+            Ok(d) => d,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => return Err(e.into()),
+        };
         let (raw, _iface_hash): (Vec<u8>, Vec<u8>) =
             crate::util::msgpack::deserialize(&data)?;
 

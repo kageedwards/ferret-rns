@@ -99,6 +99,9 @@ impl RatchetStore {
         let tmp_path = self.ratchet_dir.join(format!("{}.out", hexhash));
         let final_path = self.ratchet_dir.join(&hexhash);
 
+        // Ensure directory exists (may have been cleaned up)
+        let _ = std::fs::create_dir_all(&self.ratchet_dir);
+
         std::fs::write(&tmp_path, &serialized)?;
         std::fs::rename(&tmp_path, &final_path)?;
 
