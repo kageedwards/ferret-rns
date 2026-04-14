@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::{Arc, RwLock};
+use std::time::{Duration, Instant};
 
 use crate::destination::destination::Destination;
 use crate::identity::IdentityStore;
@@ -28,6 +29,7 @@ pub struct BlackholeUpdater {
     should_run: bool,
     last_updates: HashMap<[u8; 16], f64>,
     job_interval: u64,
+    last_check: Instant,
 }
 
 impl BlackholeUpdater {
@@ -37,6 +39,7 @@ impl BlackholeUpdater {
             should_run: false,
             last_updates: HashMap::new(),
             job_interval: JOB_INTERVAL,
+            last_check: Instant::now(),
         }
     }
 
@@ -53,6 +56,44 @@ impl BlackholeUpdater {
     /// Check if the updater is running.
     pub fn is_running(&self) -> bool {
         self.should_run
+    }
+
+    /// Periodic check: if enough time has elapsed since the last check,
+    /// iterate the given sources and update any that are due.
+    ///
+    /// Returns early if the updater is not running or the `job_interval`
+    /// has not yet elapsed. Failures on individual sources are logged and
+    /// skipped so the loop continues.
+    pub fn check(
+        &mut self,
+        sources: &[[u8; 16]],
+        transport: &TransportState,
+        identity_store: &IdentityStore,
+        blackholepath: &Path,
+    ) -> Result<()> {
+        if !self.should_run {
+            return Ok(());
+        }
+
+        if self.last_check.elapsed() < Duration::from_secs(self.job_interval) {
+            return Ok(());
+        }
+
+        self.last_check = Instant::now();
+
+        for source in sources {
+            if self.is_due(source) {
+                if let Err(e) = self.update_from_source(source, transport, identity_store, blackholepath) {
+                    log_warning!(
+                        "Blackhole update from source {} failed: {}",
+                        hex_encode(source),
+                        e
+                    );
+                }
+            }
+        }
+
+        Ok(())
     }
 
     /// Check if a source is due for an update.
