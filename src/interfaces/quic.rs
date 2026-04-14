@@ -34,14 +34,14 @@ fn err(msg: String) -> crate::FerretError { crate::FerretError::InterfaceError(m
 // ── TLS helpers ──
 
 fn make_server_config() -> Result<quinn::ServerConfig> {
-    let ck = rcgen::generate_simple_self_signed(vec!["ferret".into()])
+    let ck = rcgen::generate_simple_self_signed(vec!["rns".into()])
         .map_err(|e| err(format!("rcgen: {e}")))?;
     let key = rustls::pki_types::PrivatePkcs8KeyDer::from(ck.key_pair.serialize_der());
     let mut tls = rustls::ServerConfig::builder()
         .with_no_client_auth()
         .with_single_cert(vec![ck.cert.der().clone().into()], key.into())
         .map_err(|e| err(format!("rustls: {e}")))?;
-    tls.alpn_protocols = vec![b"ferret".to_vec()];
+    tls.alpn_protocols = vec![b"rns".to_vec()];
     let qc = quinn::crypto::rustls::QuicServerConfig::try_from(tls)
         .map_err(|e| err(format!("quic cfg: {e}")))?;
     Ok(quinn::ServerConfig::with_crypto(Arc::new(qc)))
@@ -139,7 +139,7 @@ impl QUICInterface {
         ep.set_default_client_config(make_client_config());
 
         let conn = rt.block_on(async {
-            ep.connect(addr, "ferret").map_err(|e| err(format!("connect: {e}")))?
+            ep.connect(addr, "rns").map_err(|e| err(format!("connect: {e}")))?
                 .await.map_err(|e| err(format!("handshake: {e}")))
         })?;
 
@@ -270,7 +270,7 @@ impl QUICInterface {
             let ep = self.endpoint.lock().unwrap_or_else(|e| e.into_inner()).clone();
             if let Some(ep) = ep {
                 if let Ok(conn) = self.runtime.block_on(async {
-                    ep.connect(addr, "ferret").map_err(|e| err(format!("{e}")))?
+                    ep.connect(addr, "rns").map_err(|e| err(format!("{e}")))?
                         .await.map_err(|e| err(format!("{e}")))
                 }) {
                     *self.connection.lock().unwrap_or_else(|e| e.into_inner()) = Some(conn);
