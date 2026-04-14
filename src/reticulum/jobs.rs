@@ -14,8 +14,8 @@ use crate::{log_debug, log_warning};
 /// Resource cache lifetime: 24 hours.
 pub const RESOURCE_CACHE: u64 = 86_400;
 
-/// Background job check interval: 5 minutes.
-pub const JOB_INTERVAL: u64 = 300;
+/// Background job check interval: 1 second.
+pub const JOB_INTERVAL: u64 = 1;
 
 /// Cache clean interval: 15 minutes.
 pub const CLEAN_INTERVAL: u64 = 900;
