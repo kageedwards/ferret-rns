@@ -40,6 +40,22 @@ pub struct RequestReceipt {
 }
 
 impl RequestReceipt {
+    /// Create a new RequestReceipt with the given parameters.
+    pub fn new(request_id: [u8; 16], sent_at: f64, timeout: f64, request_size: usize) -> Self {
+        Self {
+            request_id,
+            status: RequestReceiptStatus::Sent,
+            response: None,
+            sent_at,
+            timeout,
+            concluded_at: None,
+            response_concluded_at: None,
+            request_size,
+            response_callback: None,
+            failed_callback: None,
+        }
+    }
+
     pub fn get_status(&self) -> RequestReceiptStatus {
         self.status
     }
@@ -69,7 +85,7 @@ impl RequestReceipt {
         self.failed_callback = Some(cb);
     }
 
-    pub(crate) fn response_received(&mut self, response: Vec<u8>) {
+    pub fn response_received(&mut self, response: Vec<u8>) {
         self.response = Some(response);
         self.status = RequestReceiptStatus::Ready;
         self.response_concluded_at = Some(now());
@@ -78,7 +94,7 @@ impl RequestReceipt {
         }
     }
 
-    pub(crate) fn request_timed_out(&mut self) {
+    pub fn request_timed_out(&mut self) {
         self.status = RequestReceiptStatus::Failed;
         self.concluded_at = Some(now());
         if let Some(ref cb) = self.failed_callback {
