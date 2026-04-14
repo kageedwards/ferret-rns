@@ -393,6 +393,7 @@ impl Link {
 
         // Set link_id from packet
         link.set_link_id(packet, data.len())?;
+        link.update_link_id_cache()?;
 
         // Parse signalling if present
         if data.len() == ECPUBSIZE + LINK_MTU_SIZE {
