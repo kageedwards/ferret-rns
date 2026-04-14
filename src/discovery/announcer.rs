@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 use std::sync::{Arc, RwLock};
+use std::time::{Duration, Instant};
 
 use crate::destination::destination::Destination;
 use crate::identity::Identity;
@@ -10,6 +11,8 @@ use crate::types::destination::{DestinationDirection, DestinationType};
 use crate::{FerretError, Result};
 
 use super::handler::FLAG_ENCRYPTED;
+
+use crate::log_warning;
 
 /// Job check interval in seconds.
 pub const JOB_INTERVAL: u64 = 60;
@@ -59,6 +62,7 @@ pub struct InterfaceDiscoveryInfo {
 pub struct InterfaceAnnouncer {
     should_run: bool,
     job_interval: u64,
+    last_check: Instant,
     stamp_cache: HashMap<[u8; 32], Vec<u8>>,
     /// Real discovery Destination (Single/In) for interface announces.
     discovery_destination: Arc<RwLock<Destination>>,
@@ -91,6 +95,7 @@ impl InterfaceAnnouncer {
         Ok(Self {
             should_run: false,
             job_interval: JOB_INTERVAL,
+            last_check: Instant::now(),
             stamp_cache: HashMap::new(),
             discovery_destination: dest_arc,
             transport: transport.clone(),
@@ -110,6 +115,45 @@ impl InterfaceAnnouncer {
     /// Check if the announcer is running.
     pub fn is_running(&self) -> bool {
         self.should_run
+    }
+
+    /// Periodic check: if enough time has elapsed since the last check,
+    /// iterate the given interfaces and announce any that are due.
+    ///
+    /// Returns early if the announcer is not running or the `job_interval`
+    /// has not yet elapsed. Failures on individual interfaces are logged and
+    /// skipped so the loop continues.
+    pub fn check(&mut self, interfaces: &[InterfaceDiscoveryInfo]) -> Result<()> {
+        if !self.should_run {
+            return Ok(());
+        }
+
+        if self.last_check.elapsed() < Duration::from_secs(self.job_interval) {
+            return Ok(());
+        }
+
+        self.last_check = Instant::now();
+
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs_f64();
+
+        for info in interfaces {
+            if info.discovery_announce_interval > 0.0
+                && (now - info.last_discovery_announce) >= info.discovery_announce_interval
+            {
+                if let Err(e) = self.announce_interface(info, None) {
+                    log_warning!(
+                        "Interface announce for {} failed: {}",
+                        info.name,
+                        e
+                    );
+                }
+            }
+        }
+
+        Ok(())
     }
 
     /// Announce a single discoverable interface.
