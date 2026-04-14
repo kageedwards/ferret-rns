@@ -183,7 +183,7 @@ impl Link {
     }
 
     /// Initiator: validate the link proof from the responder.
-    pub(crate) fn validate_proof(
+    pub fn validate_proof(
         &self,
         packet: &Packet,
         transport: &TransportState,
