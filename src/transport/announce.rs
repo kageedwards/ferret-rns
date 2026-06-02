@@ -219,6 +219,7 @@ impl TransportState {
                 &dest_hash,
                 &identity,
                 announce.app_data.as_deref(),
+                &announce.name_hash,
             );
         }
 
@@ -300,7 +301,7 @@ mod tests {
         let cc = call_count.clone();
         let handler = crate::transport::AnnounceHandler {
             aspect_filter: "testapp".to_string(),
-            callback: Box::new(move |_hash, _id, _data| {
+            callback: Box::new(move |_hash, _id, _data, _name_hash| {
                 cc.fetch_add(1, Ordering::SeqCst);
             }),
         };

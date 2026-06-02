@@ -65,7 +65,8 @@ pub struct LinkEntry {
 /// A registered announce handler with aspect filter and callback.
 pub struct AnnounceHandler {
     pub aspect_filter: String,
-    pub callback: Box<dyn Fn(&[u8; 16], &Identity, Option<&[u8]>) + Send + Sync>,
+    /// Callback: (dest_hash, identity, app_data, name_hash)
+    pub callback: Box<dyn Fn(&[u8; 16], &Identity, Option<&[u8]>, &[u8]) + Send + Sync>,
 }
 
 /// A link that has been requested but not yet established.
@@ -405,7 +406,7 @@ mod tests {
         let ts = TransportState::new();
         let handler = AnnounceHandler {
             aspect_filter: "myapp".to_string(),
-            callback: Box::new(|_hash, _id, _data| {}),
+            callback: Box::new(|_hash, _id, _data, _name_hash| {}),
         };
         ts.register_announce_handler(handler).unwrap();
         ts.deregister_announce_handler("myapp").unwrap();
