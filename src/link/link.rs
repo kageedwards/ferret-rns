@@ -448,6 +448,16 @@ impl Link {
         Ok(self.read()?.mtu)
     }
 
+    /// Poll the status of a pending request by its ID.
+    ///
+    /// Returns `(status, response_data)` if the request is found,
+    /// or `None` if no such request exists.
+    pub fn poll_request(&self, request_id: &[u8; 16]) -> Result<Option<(super::request::RequestReceiptStatus, Option<Vec<u8>>)>> {
+        let inner = self.read()?;
+        let receipt = inner.pending_requests.iter().find(|r| &r.request_id == request_id);
+        Ok(receipt.map(|r| (r.status, r.response.clone())))
+    }
+
     // ── Channel ──
 
     /// Lazily create a Channel backed by LinkChannelOutlet, return mutable ref.
