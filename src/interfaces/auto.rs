@@ -10,6 +10,7 @@ use std::time::Duration;
 
 use crate::crypto::sha256;
 use crate::interfaces::base::Interface;
+use crate::transport::TransportState;
 use crate::Result;
 
 // Constants
@@ -82,10 +83,12 @@ pub struct AutoInterface {
     pub ignored_interfaces: Vec<String>,
     peers: Mutex<HashMap<String, PeerEntry>>,
     adopted_interfaces: Mutex<HashMap<String, String>>,
-    spawned_interfaces: Mutex<HashMap<String, AutoInterfacePeer>>,
+    spawned_interfaces: Arc<Mutex<HashMap<String, AutoInterfacePeer>>>,
     multicast_echoes: Mutex<HashMap<String, f64>>,
     timed_out_interfaces: Mutex<HashMap<String, bool>>,
     shutdown: AtomicBool,
+    /// Transport reference for inbound packet delivery from data listener.
+    transport: Mutex<Option<TransportState>>,
 }
 
 fn iface_err(msg: String) -> crate::FerretError { crate::FerretError::InterfaceError(msg) }
@@ -119,10 +122,34 @@ impl AutoInterface {
         let group_hash = sha256(&gid);
         let mcast_addr = Self::compute_mcast_address(&group_hash, &scope, &addr_type);
 
-        let mut base = Interface::new(name.clone(), None);
+        // The AutoInterface base gets a transmit_fn that dispatches to the
+        // appropriate peer. This is needed because the path table stores the
+        // AutoInterface's base as the receiving_interface, and outbound() calls
+        // transmit() on it.
+        let spawned_for_tx: Arc<Mutex<HashMap<String, AutoInterfacePeer>>> =
+            Arc::new(Mutex::new(HashMap::new()));
+        let spawned_for_tx_clone = Arc::clone(&spawned_for_tx);
+
+        let transmit_fn: Box<dyn Fn(&[u8]) -> Result<()> + Send + Sync> = Box::new(move |data| {
+            // Broadcast to all peers (we don't know the specific destination peer
+            // at the interface level — the transport handles routing)
+            let peers = spawned_for_tx_clone.lock().unwrap_or_else(|e| e.into_inner());
+            if peers.is_empty() {
+                return Err(iface_err("no peers available for transmit".to_string()));
+            }
+            for (_addr, peer) in peers.iter() {
+                if peer.base.online.load(Ordering::Relaxed) {
+                    let _ = peer.base.process_outgoing(data);
+                }
+            }
+            Ok(())
+        });
+
+        let mut base = Interface::new(name.clone(), Some(transmit_fn));
         base.bitrate = BITRATE_GUESS;
         base.hw_mtu = Some(HW_MTU);
         base.dir_in = true;
+        base.dir_out = true;
         base.online.store(true, Ordering::Relaxed);
 
         let iface = Arc::new(Self {
@@ -134,10 +161,11 @@ impl AutoInterface {
             allowed_interfaces, ignored_interfaces,
             peers: Mutex::new(HashMap::new()),
             adopted_interfaces: Mutex::new(HashMap::new()),
-            spawned_interfaces: Mutex::new(HashMap::new()),
+            spawned_interfaces: spawned_for_tx,
             multicast_echoes: Mutex::new(HashMap::new()),
             timed_out_interfaces: Mutex::new(HashMap::new()),
             shutdown: AtomicBool::new(false),
+            transport: Mutex::new(None),
         });
 
         let c = Arc::clone(&iface);
@@ -150,11 +178,26 @@ impl AutoInterface {
             .name(format!("auto-jobs-{name}"))
             .spawn(move || c.peer_jobs())
             .map_err(|e| iface_err(format!("spawn peer_jobs: {e}")))?;
+
+        // Spawn data listener thread on data_port
+        let c = Arc::clone(&iface);
+        let data_port_for_listener = d_port;
+        std::thread::Builder::new()
+            .name(format!("auto-data-{}", iface.base.name))
+            .spawn(move || c.data_listen_loop(data_port_for_listener))
+            .map_err(|e| iface_err(format!("spawn data_listen: {e}")))?;
+
         Ok(iface)
     }
 
+    /// Set the transport reference for inbound packet delivery.
+    /// Called after interface synthesis when transport is available.
+    pub fn set_transport(&self, transport: TransportState) {
+        let mut t = self.transport.lock().unwrap_or_else(|e| e.into_inner());
+        *t = Some(transport);
+    }
+
     /// Compute IPv6 multicast address from group hash, scope, and address type.
-    /// Matches the Python reference derivation of the multicast group tag.
     pub fn compute_mcast_address(group_hash: &[u8; 32], scope: &str, addr_type: &str) -> String {
         let g = group_hash;
         let s = |i: usize| format!("{:02x}", u16::from(g[i + 1]) + (u16::from(g[i]) << 8));
@@ -162,6 +205,48 @@ impl AutoInterface {
             "ff{addr_type}{scope}:0:{}:{}:{}:{}:{}:{}",
             s(2), s(4), s(6), s(8), s(10), s(12)
         )
+    }
+
+    /// Data listener: binds to data_port and feeds received packets into transport.
+    fn data_listen_loop(self: &Arc<Self>, data_port: u16) {
+        let socket = match UdpSocket::bind(format!("[::]:{}", data_port)) {
+            Ok(s) => s,
+            Err(e) => {
+                crate::log_error!("AutoInterface data listener bind failed on port {}: {}", data_port, e);
+                return;
+            }
+        };
+        let _ = socket.set_read_timeout(Some(Duration::from_millis(500)));
+        let mut buf = [0u8; 2048];
+
+        loop {
+            if self.shutdown.load(Ordering::Relaxed) { break; }
+
+            match socket.recv_from(&mut buf) {
+                Ok((n, src)) if n > 0 => {
+                    let src_ip = src.ip().to_string();
+                    let src_addr = src_ip.split('%').next().unwrap_or(&src_ip).to_string();
+
+                    // Update peer last_heard
+                    {
+                        let mut peers = self.peers.lock().unwrap_or_else(|e| e.into_inner());
+                        if let Some(entry) = peers.get_mut(&src_addr) {
+                            entry.last_heard = now();
+                        }
+                    }
+
+                    // Feed into transport via the AutoInterface's base handle
+                    let transport = self.transport.lock().unwrap_or_else(|e| e.into_inner());
+                    if let Some(ref t) = *transport {
+                        let handle: Arc<dyn crate::transport::InterfaceHandle> = self.base.clone();
+                        if let Err(e) = t.inbound(&buf[..n], &handle) {
+                            crate::log_debug!("AutoInterface inbound error: {}", e);
+                        }
+                    }
+                }
+                _ => {} // timeout or error — continue loop
+            }
+        }
     }
 
     fn discovery_loop(self: &Arc<Self>) {
@@ -224,7 +309,7 @@ impl AutoInterface {
                     .collect()
             };
             for addr in &timed_out { self.remove_peer(addr); }
-            // Multicast echo timeout tracking for carrier loss/recovery
+            // Multicast echo timeout tracking
             let echoes = self.multicast_echoes.lock().unwrap_or_else(|e| e.into_inner());
             let mut timeouts = self.timed_out_interfaces.lock().unwrap_or_else(|e| e.into_inner());
             for (ifname, &last_echo) in echoes.iter() {

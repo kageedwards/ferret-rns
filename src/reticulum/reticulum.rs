@@ -711,6 +711,7 @@ pub fn synthesize_interfaces(
                 )?;
                 let handle: Arc<dyn InterfaceHandle> = iface.base.clone();
                 iface.base.set_transport(transport.clone(), handle.clone());
+                iface.set_transport(transport.clone());
                 transport.write()?.interfaces.push(handle);
                 Ok(())
             }

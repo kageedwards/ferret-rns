@@ -365,6 +365,14 @@ fn integration_state_persistence_round_trip() {
     let tmp = tempfile::tempdir().unwrap();
     let base = tmp.path().join("rns_persist_test");
 
+    // Pre-create config dir and write a config with no interfaces
+    // to avoid port conflicts with other tests/instances
+    std::fs::create_dir_all(&base).unwrap();
+    std::fs::write(
+        base.join("config"),
+        "[reticulum]\nshare_instance = no\n\n[logging]\nloglevel = 4\n\n[interfaces]\n",
+    ).unwrap();
+
     // --- Create first Reticulum instance (standalone, no shared instance) ---
     let config1 = ReticulumConfig {
         configdir: Some(base.clone()),
