@@ -207,14 +207,15 @@ impl TransportState {
         }
 
         for handler in &inner.announce_handlers {
-            // The aspect_filter is matched against the name_hash portion.
-            // In the Python reference, this checks if the destination's
-            // full name starts with the aspect_filter. Since we only have
-            // the name_hash here, we invoke all handlers and let them
-            // filter internally. A more precise filter would require
-            // storing the full destination name in the path table.
-            // For now, invoke all handlers (matching Python's behavior
-            // when aspect_filter is None or empty).
+            // Empty aspect_filter matches all announces.
+            // Non-empty filter: compute SHA256(filter)[..10] and compare to name_hash.
+            if !handler.aspect_filter.is_empty() {
+                let filter_hash = crate::crypto::sha256(handler.aspect_filter.as_bytes());
+                if announce.name_hash.len() >= 10 && filter_hash[..10] != announce.name_hash[..10] {
+                    continue;
+                }
+            }
+
             (handler.callback)(
                 &dest_hash,
                 &identity,
