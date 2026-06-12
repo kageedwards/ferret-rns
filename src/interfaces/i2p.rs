@@ -1,7 +1,6 @@
 // I2PInterface — tunnels Reticulum traffic over the I2P anonymity network
 // via the SAM (Simple Anonymous Messaging) API.
 //
-// Ported from the Python reference: lxcf/_ref_rns/Interfaces/I2PInterface.py
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;

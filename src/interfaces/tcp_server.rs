@@ -1,7 +1,6 @@
 // TCPServerInterface — listens for incoming TCP connections and spawns
 // TCPClientInterface instances for each accepted client.
 //
-// Ported from the Python reference: lxcf/_ref_rns/Interfaces/TCPInterface.py
 
 use std::net::TcpListener;
 use std::sync::atomic::{AtomicBool, Ordering};

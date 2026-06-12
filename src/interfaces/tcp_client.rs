@@ -1,6 +1,5 @@
 // TCPClientInterface — TCP client with HDLC or KISS framing.
 //
-// Ported from the Python reference: lxcf/_ref_rns/Interfaces/TCPInterface.py
 
 use std::io::{Read, Write};
 use std::net::TcpStream;

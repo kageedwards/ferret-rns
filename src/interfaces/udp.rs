@@ -1,6 +1,5 @@
 // UDPInterface — UDP datagram transport (no framing codec needed).
 //
-// Ported from the Python reference: lxcf/_ref_rns/Interfaces/UDPInterface.py
 
 use std::net::UdpSocket;
 use std::sync::atomic::{AtomicBool, Ordering};

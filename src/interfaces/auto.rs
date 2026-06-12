@@ -1,6 +1,5 @@
 // AutoInterface — IPv6 multicast peer discovery with UDP data transport.
 //
-// Ported from the Python reference: lxcf/_ref_rns/Interfaces/AutoInterface.py
 
 use std::collections::HashMap;
 use std::net::{Ipv6Addr, UdpSocket};

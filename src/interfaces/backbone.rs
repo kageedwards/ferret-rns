@@ -1,7 +1,6 @@
 // BackboneInterface — high-performance TCP server/client with HDLC framing
 // and a large HW_MTU (1 MB) for backbone links.
 //
-// Ported from the Python reference: lxcf/_ref_rns/Interfaces/BackboneInterface.py
 //
 // The Python reference uses a shared epoll loop across all backbone listeners
 // and spawned clients. In this Rust port we use the simpler per-connection

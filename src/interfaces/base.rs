@@ -1,6 +1,5 @@
 // Base Interface struct — common state shared by all concrete interfaces.
 //
-// Ported from the Python reference: lxcf/_ref_rns/Interfaces/Interface.py
 
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
