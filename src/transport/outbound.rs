@@ -40,10 +40,11 @@ impl TransportState {
                 let hops = path_entry.hops;
                 let iface = Arc::clone(&path_entry.receiving_interface);
                 let next_hop = path_entry.received_from;
+                let transport_enabled = inner.transport_enabled;
                 drop(inner);
 
-                if hops > 1 {
-                    // Header1 → Header2 rewrite: insert transport headers
+                if transport_enabled && hops > 1 {
+                    // We are a transport node: Header1 → Header2 rewrite
                     let new_raw = rewrite_header1_to_header2(
                         &packet.raw,
                         packet.flags,
@@ -52,7 +53,7 @@ impl TransportState {
                     );
                     iface.transmit(&new_raw)?;
                 } else {
-                    // Direct delivery — transmit as-is on path interface
+                    // Client node or direct delivery — transmit as Header1
                     iface.transmit(&packet.raw)?;
                 }
 

@@ -215,7 +215,6 @@ impl TransportState {
                     continue;
                 }
             }
-
             (handler.callback)(
                 &dest_hash,
                 &identity,
